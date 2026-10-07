@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded in the speech helper's binary (__TEXT,__info_plist; scripts/build-speech-helper.sh).
+     The helper is its own "responsible" process (main.swift disclaims), so macOS reads the
+     reasons for the microphone and speech recognition here, whoever started the app. -->
+<plist version="1.0">
+  <dict>
+    <key>CFBundleIdentifier</key>
+    <string>app.anothernote.desktop.speech</string>
+    <key>CFBundleName</key>
+    <string>AnotherNote Speech</string>
+    <key>CFBundleDisplayName</key>
+    <string>AnotherNote</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>AnotherNote uses the microphone so you can dictate notes and talk to the tutor.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>AnotherNote uses speech recognition so the words you dictate appear as you say them.</string>
+  </dict>
+</plist>

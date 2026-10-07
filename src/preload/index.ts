@@ -12,12 +12,62 @@ import { contextBridge, ipcRenderer, webFrame } from "electron";
 
 const VERSION_FLAG = "--anothernotes-version=";
 const versionArg = process.argv.find((arg) => arg.startsWith(VERSION_FLAG));
+/* The main process has the Mac's speech helper (src/main/speech.ts): this page gets a
+   SpeechRecognition of its own over it (below), and tells the web app so (speech.native). */
+const nativeSpeech = process.argv.includes("--anothernotes-speech=1");
+
+/*
+  The speech bridge. A recogniser of the page (the shim below) starts a session here
+  and gets its events back: start, audiostart, speechstart, interim (the words in
+  flight), phrase (continuous: one finished), error (a Web Speech API code), end (and,
+  for one utterance, its text). Sessions are numbered per page; the main process maps
+  them to the helper's.
+*/
+interface SpeechEvent {
+  ev: string;
+  text?: string;
+  code?: string;
+}
+const speechListeners = new Map<number, (event: SpeechEvent) => void>();
+let speechRef = 0;
+if (nativeSpeech) {
+  ipcRenderer.on("speech:event", (_event, message: { ref?: unknown; ev?: unknown; text?: unknown; code?: unknown }) => {
+    if (typeof message?.ref !== "number" || typeof message.ev !== "string") return;
+    const listener = speechListeners.get(message.ref);
+    if (!listener) return;
+    if (message.ev === "end") speechListeners.delete(message.ref);
+    listener({
+      ev: message.ev,
+      text: typeof message.text === "string" ? message.text : undefined,
+      code: typeof message.code === "string" ? message.code : undefined,
+    });
+  });
+}
+const speechBridge = Object.freeze({
+  /** The words appear as they are said, on this Mac: the web app may treat it as a browser's recogniser. */
+  native: true,
+  start: (lang: unknown, continuous: unknown, onEvent: (event: SpeechEvent) => void): number => {
+    const ref = ++speechRef;
+    speechListeners.set(ref, onEvent);
+    ipcRenderer.send("speech:start", ref, typeof lang === "string" ? lang : "", continuous === true);
+    return ref;
+  },
+  stop: (ref: unknown): void => {
+    if (typeof ref === "number") ipcRenderer.send("speech:stop", ref);
+  },
+  abort: (ref: unknown): void => {
+    if (typeof ref !== "number") return;
+    speechListeners.delete(ref);
+    ipcRenderer.send("speech:abort", ref);
+  },
+});
 
 contextBridge.exposeInMainWorld(
   "anothernotes",
   Object.freeze({
     platform: process.platform,
     version: versionArg ? versionArg.slice(VERSION_FLAG.length) : "",
+    ...(nativeSpeech ? { speech: speechBridge } : {}),
     auth: Object.freeze({
       /** Sign in with an email and password; on success the window moves to the dashboard. */
       signIn: (form: { email: string; password: string }): Promise<unknown> =>
@@ -86,6 +136,129 @@ function reportChrome(): void {
   window.addEventListener("resize", soon);
   document.addEventListener("transitionend", soon, true);
   report();
+}
+
+/*
+  window.SpeechRecognition, over the Mac's own speech recognition. The web app's dictation
+  and Teach mode drive a browser's recogniser (lib/guide/speech.ts createNativeRecognizer
+  in the web repo): lang, continuous, interimResults, start/stop/abort, and the events
+  start, audiostart, speechstart, result (results[i].isFinal, results[i][0].transcript,
+  resultIndex), error (error: a code) and end. This is that surface, in the page's own
+  world before any of its scripts run, backed by the bridge above; Chromium's own
+  recogniser, which has no speech service behind it in the app, is put aside.
+
+  Continuous: every finished phrase is one final result, kept in order, and the words in
+  flight the one interim result after them. One utterance: a single result at index 0,
+  interim until the utterance is done, then final, then end.
+*/
+if (nativeSpeech) {
+  contextBridge.executeInMainWorld({
+    func: () => {
+      type Bridge = {
+        start: (lang: string, continuous: boolean, onEvent: (event: { ev: string; text?: string; code?: string }) => void) => number;
+        stop: (ref: number) => void;
+        abort: (ref: number) => void;
+      };
+      const found = (window as unknown as { anothernotes?: { speech?: Bridge } }).anothernotes?.speech;
+      if (!found) return;
+      const bridge: Bridge = found;
+      const result = (transcript: string, isFinal: boolean) => {
+        const alternative = { transcript, confidence: isFinal ? 1 : 0.5 };
+        return { 0: alternative, length: 1, isFinal, item: () => alternative };
+      };
+      class Recognition extends EventTarget {
+        lang = "";
+        continuous = false;
+        interimResults = false;
+        maxAlternatives = 1;
+        onstart: ((e: Event) => void) | null = null;
+        onaudiostart: ((e: Event) => void) | null = null;
+        onsoundstart: ((e: Event) => void) | null = null;
+        onspeechstart: ((e: Event) => void) | null = null;
+        onspeechend: ((e: Event) => void) | null = null;
+        onsoundend: ((e: Event) => void) | null = null;
+        onaudioend: ((e: Event) => void) | null = null;
+        onresult: ((e: Event) => void) | null = null;
+        onnomatch: ((e: Event) => void) | null = null;
+        onerror: ((e: Event) => void) | null = null;
+        onend: ((e: Event) => void) | null = null;
+        private ref: number | null = null;
+        private finals: string[] = [];
+
+        private fire(name: string, props: Record<string, unknown> = {}): void {
+          const event = Object.assign(new Event(name), props);
+          this.dispatchEvent(event);
+          const handler = (this as unknown as Record<string, unknown>)[`on${name}`];
+          if (typeof handler === "function") (handler as (e: Event) => void).call(this, event);
+        }
+
+        private results(interim: string | null) {
+          const list = this.finals.map((text) => result(text, true));
+          if (interim !== null) list.push(result(interim, false));
+          return Object.assign(list, { item: (i: number) => list[i] });
+        }
+
+        start(): void {
+          if (this.ref !== null) throw new DOMException("recognition has already started", "InvalidStateError");
+          this.finals = [];
+          const ref = bridge.start(this.lang || navigator.language || "en-US", !!this.continuous, (event) => this.on(ref, event));
+          this.ref = ref;
+        }
+
+        private on(ref: number, event: { ev: string; text?: string; code?: string }): void {
+          if (this.ref !== ref) return;
+          switch (event.ev) {
+            case "start":
+            case "audiostart":
+            case "speechstart":
+              this.fire(event.ev);
+              return;
+            case "interim":
+              if (this.interimResults) this.fire("result", { results: this.results(event.text ?? ""), resultIndex: this.finals.length });
+              return;
+            case "phrase":
+              if (!event.text) return;
+              this.finals.push(event.text);
+              this.fire("result", { results: this.results(null), resultIndex: this.finals.length - 1 });
+              return;
+            case "error":
+              this.ref = null;
+              this.fire("error", { error: event.code || "network", message: "" });
+              this.fire("end");
+              return;
+            case "end":
+              this.ref = null;
+              if (event.text) {
+                this.finals.push(event.text);
+                this.fire("result", { results: this.results(null), resultIndex: this.finals.length - 1 });
+              }
+              this.fire("end");
+              return;
+            default:
+              return;
+          }
+        }
+
+        stop(): void {
+          if (this.ref !== null) bridge.stop(this.ref);
+        }
+
+        abort(): void {
+          const ref = this.ref;
+          if (ref === null) return;
+          this.ref = null;
+          bridge.abort(ref);
+          queueMicrotask(() => {
+            this.fire("error", { error: "aborted", message: "" });
+            this.fire("end");
+          });
+        }
+      }
+      const w = window as unknown as Record<string, unknown>;
+      w.SpeechRecognition = Recognition;
+      w.webkitSpeechRecognition = Recognition;
+    },
+  });
 }
 
 /*
@@ -175,6 +348,15 @@ const SHELL_CSS = `
       -webkit-app-region: no-drag;
     }
     [data-sidebar="rail"] { -webkit-app-region: no-drag; }
+    /* The PDF full-page reader (web index.css .pdf-reader) fills the window; here the tab bar
+       covers its top 44px, and the window buttons and the sidebar header's drag strip sit
+       there too. So it starts below the bar, and it is never part of the drag strip. Its
+       pages fit its own box (PdfDocument measureFit). Only in the sidebar layout, where the
+       page starts at the window's top. */
+    .peer ~ main .pdf-doc.pdf-reader { top: 44px !important; -webkit-app-region: no-drag; }
+    .peer ~ main .pdf-reader-top { top: 44px !important; }
+    .peer ~ main .pdf-reader-arrow { top: calc(50% + 22px) !important; }
+    .pdf-reader-bar, .pdf-reader-arrow { -webkit-app-region: no-drag; }
   }
 `;
 
@@ -216,6 +398,12 @@ function routeLinks(): void {
       const here = noteOf(location.pathname);
       const elsewhere = role === "home" ? there !== null : there === null || there !== here;
       if (!elsewhere) return;
+      // A link in the home page's own content (a dashboard card; the exam plan's link carries
+      // router state, { plan: true }) goes through the web app's router, which keeps that
+      // state, and the page then becomes the note's tab (route -> becomeTab in windows.ts),
+      // as a button's navigate() does. The sidebar, its rail menus (portaled outside it) and
+      // the narrow-window sheet are not in <main>, so their links are still routed here.
+      if (role === "home" && link.closest("main")) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       ipcRenderer.send("nav:open", `${to.pathname}${to.search}${to.hash}`);
@@ -241,9 +429,11 @@ if (location.protocol === "app:" || location.protocol === "http:" || location.pr
   screen (it may have started while the setting was changing). A page whose sidebar is
   the other way docks or folds it with the web app's own ⌘B; one whose sidebar is
   another width sets the width where the web app's own edge strip sets it, the
-  --sidebar-width of its layout's wrapper.
+  --sidebar-width of its layout's wrapper. A fold follows at once; an open only as a page
+  comes on screen and not while the sidebar is pinned somewhere (see followSidebar: a page
+  opened out of sight folds itself again and would unpin the one in use).
 */
-function followSidebar(jar: string | null): void {
+function followSidebar(jar: string | null, onScreen: boolean): void {
   let docked: string | undefined;
   try {
     docked = (JSON.parse(jar || "{}") as Record<string, { value?: string }>)["sidebar:docked"]?.value;
@@ -251,10 +441,33 @@ function followSidebar(jar: string | null): void {
     return;
   }
   if (docked !== "true" && docked !== "false") return;
-  const state = document.querySelector(".peer[data-state]")?.getAttribute("data-state");
+  const peer = document.querySelector(".peer[data-state]");
+  const state = peer?.getAttribute("data-state");
   if (!state || (state === "expanded") === (docked === "true")) return;
+  // This page's own edge strip is being dragged: the drag owns the sidebar until it ends.
+  if (document.querySelector('[class~="group/sidebar-wrapper"]')?.hasAttribute("data-resizing")) return;
+  // Pinned here (dragged to a width to stay: data-pinned, ui/sidebar.tsx): never folded from outside.
+  if (docked === "false" && peer?.getAttribute("data-pinned") === "true") return;
+  if (docked === "true") {
+    // A sidebar opened by ⌘B is not pinned, and folds itself 3 s later (AUTO_FOLD_MS) when the
+    // pointer is not in it; that fold saves docked=false and clears the pin for every page,
+    // which folds the sidebar the student is using. So a page opens only as it comes on
+    // screen (only the page in use writes docked=true, and a page never hears its own
+    // writes), and not while another page is pinned: it keeps its rail, and a page loaded
+    // later starts pinned. (Not document.visibilityState: pages playing a lesson, or about
+    // to come on screen, run unthrottled and report "visible" while out of sight.)
+    if (!onScreen) return;
+    try {
+      if (localStorage.getItem(SIDEBAR_PINNED_KEY) === "1") return;
+    } catch {
+      return;
+    }
+  }
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", code: "KeyB", metaKey: true, bubbles: true, cancelable: true }));
 }
+
+/** The sidebar dragged to a width to stay, in any page (SIDEBAR_PINNED_KEY in ui/sidebar.tsx). */
+const SIDEBAR_PINNED_KEY = "sidebar:pinned";
 
 /** The widths the web app's edge strip allows (SIDEBAR_MIN_PX and SIDEBAR_MAX_PX in ui/sidebar.tsx). */
 const SIDEBAR_WIDTH_KEY = "sidebar:width";
@@ -273,13 +486,13 @@ function followSidebarWidth(value: string | null): void {
 
 if (location.protocol === "app:") {
   window.addEventListener("storage", (event) => {
-    if (event.key === "__anothernotes_cookies") followSidebar(event.newValue);
+    if (event.key === "__anothernotes_cookies") followSidebar(event.newValue, false);
     else if (event.key === SIDEBAR_WIDTH_KEY) followSidebarWidth(event.newValue);
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     try {
-      followSidebar(localStorage.getItem("__anothernotes_cookies"));
+      followSidebar(localStorage.getItem("__anothernotes_cookies"), true);
       followSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     } catch {
       /* storage blocked: the page keeps the sidebar it has */

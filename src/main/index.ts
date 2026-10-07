@@ -18,6 +18,7 @@ import {
 import { installMenu } from "./menu";
 import { installRenderer, registerAppScheme, rendererBuild } from "./renderer";
 import { installSignIn } from "./signin";
+import { installSpeech } from "./speech";
 import { installUpdater } from "./updater";
 import { createMainWindow, focusMainWindow, getMainWindow, setBrowserSignIn, showSignIn } from "./windows";
 
@@ -145,6 +146,8 @@ if (!app.requestSingleInstanceLock()) {
       showSignIn();
     });
     installSignIn(trusted);
+    // Dictation and Teach mode through the Mac's own speech recognition (speech.ts).
+    installSpeech();
     ipcMain.handle("auth:cancel-browser-sign-in", (event) => {
       if (!trusted(event)) throw new Error("not allowed");
       cancelBrowserSignIn();

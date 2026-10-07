@@ -15,6 +15,7 @@ import { APP_ORIGIN, APP_URL, originOf, SITE_ORIGIN, WEBSITE_URL } from "./confi
 import { appEvents } from "./events";
 import { openExternal } from "./links";
 import { watchLessonAudio } from "./media";
+import { nativeSpeechAvailable } from "./speech";
 import { loadWindowState, saveWindowState } from "./store";
 
 /*
@@ -32,7 +33,7 @@ import { loadWindowState, saveWindowState } from "./store";
   (the page's preload reports the edge and makes room for the bar).
 
   Tabs are for notes and learning sessions only. Everything else (the dashboard,
-  folders, calendar, profile) lives in one home page behind the tabs, which the sidebar
+  folders, the sticky wall, calendar, profile) lives in one home page behind the tabs, which the sidebar
   and the Go menu show; it is never a tab.
 
   Pages. Each is a view of the web app (a WebContentsView) in one of these roles:
@@ -82,6 +83,11 @@ interface Page {
   key: string | null;
   /** Its own last route: where the home page is, or the note a tab shows. */
   lastUrl: string;
+  /**
+   * The app is putting this page back where it was (restore): the web app's "leave without
+   * saving?" refusal is overridden for that one load. Cleared when a new document commits.
+   */
+  leaveOk?: boolean;
   view: WebContentsView;
   /** A note's tab: its name, read from the page. */
   title: string;
@@ -149,26 +155,35 @@ const GOOGLE_SIGNIN_HOSTS = new Set(["accounts.google.com"]);
 const ROUND_TRIP_PREFIXES = ["/api/auth/", "/api/sources/"];
 
 /**
- * The loading screen stays up at least this long (no flash, and its pencil has written a
- * line) and at most this long (no hang).
+ * The loading screen (static/loading.html) is an intro: its little computer types a note,
+ * turns it into a smiley, writes "Welcome to AnotherNote" and plays its pictures. The page
+ * says when that is over by setting its title to SPLASH_READY_TITLE (static/loading.js),
+ * so its timing lives in the page, counted from its own first paint; the app opens then,
+ * or when its first page has loaded if that is later. The intro gets at most
+ * SPLASH_INTRO_MAX_MS (however many pictures there are), the first page SPLASH_MAX_MS
+ * (no hang). It plays once per run, at launch: a window reopened later (the Dock, a link,
+ * a menu item) opens as soon as its page has loaded.
  */
-const SPLASH_MIN_MS = 1100;
+const SPLASH_READY_TITLE = "AnotherNote:ready";
+const SPLASH_INTRO_MAX_MS = 10000;
 const SPLASH_MAX_MS = 15000;
+let splashShown = false;
 
 /** A small frameless window with the loading animation, shown while the first page loads. */
 function createSplash(): BrowserWindow {
   const splash = new BrowserWindow({
-    width: 360,
-    height: 380,
+    width: 420,
+    height: 440,
     frame: false,
     resizable: false,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
     show: false,
-    title: "AnotherNote",
+    title: "Opening AnotherNote…",
     backgroundColor: "#ffffff",
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+    // The intro's timers must run on time even while the window is coming up behind others.
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
   });
   splash.once("ready-to-show", () => {
     if (!splash.isDestroyed()) splash.show();
@@ -200,6 +215,20 @@ const isAppUrl = (url: string): boolean => {
  * is the website's front door, so the app goes to the dashboard (or sign-in) instead.
  */
 const SIGN_IN_PATHS = new Set(["/auth", "/kids"]);
+
+/**
+ * The website's own pages (the web repo's scripts/site-routes.mjs PUBLIC_PAGES). A link to
+ * one that asks for a new window, like the upload dialog's "How we handle it" (/privacy),
+ * opens in the browser on the server the app talks to: in the home view it would take the
+ * dashboard's place, and whatever was half done there (an upload being chosen) with it.
+ */
+const WEBSITE_PATHS = new Set(["/", "/privacy", "/terms", "/contact", "/waitlist", "/features"]);
+const websiteUrlOf = (url: string): string | null => {
+  const where = pathOf(url);
+  if (!where || !WEBSITE_PATHS.has(where.toLowerCase())) return null;
+  const u = new URL(url);
+  return `${SITE_ORIGIN}${u.pathname}${u.search}${u.hash}`;
+};
 const pathOf = (url: string): string | null => {
   try {
     const u = new URL(url);
@@ -235,6 +264,7 @@ function routeLabel(url: string): string {
   if (where === "/dashboard/note/new") return "New note";
   if (where.startsWith("/dashboard/note/") || where.endsWith("/full-study")) return "Note";
   if (where === "/dashboard/folders") return "Folders";
+  if (where === "/dashboard/stickies") return "Sticky wall";
   if (where.startsWith("/dashboard/folder/")) return "Folder";
   if (where === "/dashboard/calendar") return "Calendar";
   if (where === "/dashboard/profile") return "Profile";
@@ -453,29 +483,52 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   const onListsChanged = (): void => markListsChanged();
   appEvents.on("lists-changed", onListsChanged);
 
-  // The loading screen, until the first page (the web app, the sign-in screen or the
-  // offline page) has finished loading.
-  const splash = createSplash();
-  const notBefore = Date.now() + SPLASH_MIN_MS;
+  // The loading screen (at launch only), until its intro is over and the first page (the
+  // web app, the sign-in screen or the offline page) has finished loading.
+  const splash = splashShown ? null : createSplash();
+  splashShown = true;
   let revealed = false;
+  let pageLoaded = false;
+  let introOver = !splash;
   const reveal = (): void => {
     if (revealed) return;
     revealed = true;
     clearTimeout(fallback);
-    setTimeout(() => {
-      if (!win.isDestroyed()) {
-        win.show();
-        win.focus();
-        activeContents()?.focus();
-      }
-      if (!splash.isDestroyed()) splash.close();
-    }, Math.max(0, notBefore - Date.now()));
+    clearTimeout(introCap);
+    if (!win.isDestroyed()) {
+      win.show();
+      win.focus();
+      activeContents()?.focus();
+    }
+    if (splash && !splash.isDestroyed()) splash.close();
   };
+  const maybeReveal = (): void => {
+    if (pageLoaded && introOver) reveal();
+  };
+  const endIntro = (): void => {
+    if (introOver) return;
+    introOver = true;
+    clearTimeout(introCap);
+    maybeReveal();
+  };
+  if (splash) {
+    splash.on("page-title-updated", (event, title) => {
+      if (title !== SPLASH_READY_TITLE) return;
+      event.preventDefault(); // the window keeps its own name
+      endIntro();
+    });
+    splash.webContents.once("did-fail-load", endIntro);
+    splash.once("closed", endIntro);
+  }
+  const introCap = splash ? setTimeout(endIntro, SPLASH_INTRO_MAX_MS) : undefined;
   const fallback = setTimeout(reveal, SPLASH_MAX_MS);
 
   const home = newPage("home", first === "signin" ? null : APP_URL);
   selectPage(home.id);
-  home.view.webContents.once("did-finish-load", reveal);
+  home.view.webContents.once("did-finish-load", () => {
+    pageLoaded = true;
+    maybeReveal();
+  });
   if (first === "signin") showSignIn(win);
   else scheduleSpare(2500);
 
@@ -521,11 +574,12 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   });
   win.on("closed", () => {
     clearTimeout(fallback);
+    clearTimeout(introCap);
     clearInterval(titleTimer);
     clearTimeout(spareTimer);
     clearTimeout(refreshTimer);
     appEvents.off("lists-changed", onListsChanged);
-    if (!splash.isDestroyed()) splash.close();
+    if (splash && !splash.isDestroyed()) splash.close();
     if (mainWindow === win) {
       mainWindow = null;
       toolbar = null;
@@ -549,7 +603,11 @@ function newPage(role: Role, url: string | null): Page {
       spellcheck: true,
       // Full speed while on screen or playing a lesson; applyThrottle() decides per page.
       backgroundThrottling: false,
-      additionalArguments: [`--anothernotes-version=${app.getVersion()}`],
+      additionalArguments: [
+        `--anothernotes-version=${app.getVersion()}`,
+        // The preload installs window.SpeechRecognition over the app's helper (speech.ts).
+        ...(nativeSpeechAvailable() ? ["--anothernotes-speech=1"] : []),
+      ],
     },
   });
   view.setBackgroundColor(theme?.background || "#fff9f0");
@@ -879,7 +937,10 @@ function restore(page: Page): void {
   if (i > 0 && history.getEntryAtIndex(i - 1)?.url === page.lastUrl) {
     page.pruneForward = true;
     history.goBack();
-  } else void contents.loadURL(page.lastUrl);
+  } else {
+    page.leaveOk = true;
+    void contents.loadURL(page.lastUrl);
+  }
 }
 
 /** After a page was put back: forget the step it was taken away by, so forward can't repeat it. */
@@ -1065,14 +1126,16 @@ function wirePage(win: BrowserWindow, page: Page): void {
   });
   contents.on("dom-ready", () => sendRole(page));
 
-  // Links that ask for a new window: a note in its tab, the app's other pages in the
-  // home page, the rest in the browser. From the sign-in screen (its terms and privacy
-  // links), always the browser.
+  // Links that ask for a new window: a note in its tab, the website's pages in the browser,
+  // the app's other pages in the home page, the rest in the browser. From the sign-in
+  // screen (its terms and privacy links), always the browser.
   contents.setWindowOpenHandler(({ url }) => {
     if (!shown(page)) return { action: "deny" };
     if (page.signIn) openExternal(url);
     else if (isAppUrl(url)) {
-      if (noteKey(url)) openNote(url);
+      const site = websiteUrlOf(url);
+      if (site) openExternal(site);
+      else if (noteKey(url)) openNote(url);
       else showHome(url);
     } else openExternal(url);
     return { action: "deny" };
@@ -1114,6 +1177,41 @@ function wirePage(win: BrowserWindow, page: Page): void {
   };
   contents.on("will-navigate", (event, url) => guard(event, url));
   contents.on("will-redirect", (event, url) => guard(event, url));
+  /*
+    The web app's notes saver refuses to unload while a save has failed and words are still
+    unsaved (useSheetSaver onBeforeUnload); it has already kept them in this Mac's draft and
+    sent them once more. A browser asks "leave?"; Electron instead keeps the page without a
+    word unless this event is handled, so Reload, Log out (location.href = "/auth") and a
+    forced sign-out would silently do nothing.
+  */
+  contents.on("will-prevent-unload", (event) => {
+    // The sign-in screen taking over (showSignIn set this before its load), or the app
+    // putting the page back (restore): it goes, without asking (twice).
+    if (page.signIn || page.leaveOk) {
+      page.leaveOk = false;
+      event.preventDefault();
+      return;
+    }
+    // The app's own refresh of a page out of sight (reloadPage): the page stays, so its save
+    // keeps retrying. It is still the loaded web app (reloadPage cleared booted, and no
+    // did-navigate will follow), and it refreshes again later.
+    if (page.id !== activeId || !shown(page)) {
+      if (isAppUrl(contents.getURL())) page.booted = true;
+      page.stale = true;
+      return;
+    }
+    // On screen: ask, as a browser would. Synchronous: Electron answers the page's
+    // beforeunload as soon as this handler returns.
+    const choice = dialog.showMessageBoxSync(win, {
+      type: "warning",
+      buttons: ["Leave", "Stay"],
+      defaultId: 1,
+      cancelId: 1,
+      message: "Leave without your last changes?",
+      detail: "Some of your notes couldn't be saved yet. They're kept on this Mac, and your notes offer them back when you open them again.",
+    });
+    if (choice === 0) event.preventDefault(); // unload it after all
+  });
   // The same for the web app's own route changes (history.pushState), which navigate
   // without a request: a signed-out visit to the dashboard redirects to /auth this way.
   contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
@@ -1155,6 +1253,7 @@ function wirePage(win: BrowserWindow, page: Page): void {
     refreshSoon(page);
   });
   contents.on("did-navigate", (_event, url, httpResponseCode, httpStatusText) => {
+    page.leaveOk = false;
     if (isAppUrl(url) && (!httpResponseCode || httpResponseCode < 400)) page.booted = true;
     if (httpResponseCode && shown(page)) {
       console.log(`[anothernotes] ${httpResponseCode} ${httpStatusText} ${forLog(url)}`);
@@ -1241,6 +1340,8 @@ const REASONS: Record<string, string> = {
   ERR_CONNECTION_RESET: "The connection was reset",
   ERR_NETWORK_CHANGED: "Your network changed",
   ERR_PROXY_CONNECTION_FAILED: "Your proxy refused the connection",
+  // A proxied request the server never answered (renderer.ts forward() fails it as a network error).
+  ERR_FAILED: "The AnotherNote server could not be reached",
 };
 
 function showOfflinePage(contents: WebContents, code: number, description: string, url: string): void {
@@ -1286,6 +1387,13 @@ function showContextMenu(win: BrowserWindow, contents: WebContents, params: Cont
         { type: "separator" },
       );
     }
+  }
+  // A picture: what a browser's image menu offers. A note picture is a blob: <img> the web app
+  // shows only from memory (services/notePictures.ts), and the editor copies a picture as its
+  // word, so this is the only way to copy one out. (No "Save Image As": a blob URL doesn't
+  // download reliably from here; no "Copy Image Address": it means nothing outside the page.)
+  if (params.mediaType === "image" && params.hasImageContents) {
+    items.push({ label: "Copy Image", click: () => contents.copyImageAt(params.x, params.y) }, { type: "separator" });
   }
   if (params.isEditable) {
     items.push(

@@ -7,3 +7,5 @@ release/
 # The web app's build and checkout (scripts/build-renderer.sh)
 renderer/
 .web/
+# The Mac speech helper, built by scripts/build-speech-helper.sh
+build/helpers/

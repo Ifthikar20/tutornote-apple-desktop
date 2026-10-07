@@ -6,6 +6,13 @@
 
 // Notarise only when Apple credentials are in the environment (CI secrets); otherwise
 // build unsigned so a developer can still package locally.
+// The Mac speech helper (helpers/speech, built by scripts/build-speech-helper.sh into
+// build/helpers): packaged into Contents/Resources when it was built, and signed with the
+// app (electron-builder signs every binary it finds in the bundle, with the entitlements
+// above, which include the microphone).
+const speechHelper = require("node:path").join(__dirname, "build", "helpers", "anothernote-speech");
+const hasSpeechHelper = require("node:fs").existsSync(speechHelper);
+
 const notarize = Boolean(
   process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID,
 );
@@ -44,7 +51,10 @@ module.exports = {
     extendInfo: {
       NSMicrophoneUsageDescription:
         "AnotherNote uses the microphone so you can dictate notes and talk to the tutor.",
+      NSSpeechRecognitionUsageDescription:
+        "AnotherNote uses speech recognition so the words you dictate appear as you say them.",
     },
+    ...(hasSpeechHelper ? { extraResources: [{ from: speechHelper, to: "anothernote-speech" }] } : {}),
   },
   dmg: {
     title: "AnotherNote",

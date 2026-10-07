@@ -120,8 +120,9 @@ export function installMenu(): void {
         { type: "separator" },
         { label: "Dashboard", accelerator: "CmdOrCtrl+1", click: () => navigateTo("/dashboard") },
         { label: "Folders", accelerator: "CmdOrCtrl+2", click: () => navigateTo("/dashboard/folders") },
-        { label: "Calendar", accelerator: "CmdOrCtrl+3", click: () => navigateTo("/dashboard/calendar") },
-        { label: "Profile", accelerator: "CmdOrCtrl+4", click: () => navigateTo("/dashboard/profile") },
+        { label: "Sticky Wall", accelerator: "CmdOrCtrl+3", click: () => navigateTo("/dashboard/stickies") },
+        { label: "Calendar", accelerator: "CmdOrCtrl+4", click: () => navigateTo("/dashboard/calendar") },
+        { label: "Profile", accelerator: "CmdOrCtrl+5", click: () => navigateTo("/dashboard/profile") },
       ],
     },
     {

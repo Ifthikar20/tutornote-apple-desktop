@@ -45,15 +45,17 @@ export function rendererBuild(): string {
  * No inline scripts: the pages' own scripts are files (theme-boot.js, maintenance.js,
  * terms.js). 'wasm-unsafe-eval' is for pdf.js's JPEG 2000 and ICC decoders. Every
  * picture the app shows is its own (/img), so img-src names no other host.
+ * No Cloudflare Web Analytics hosts either: the privacy page promises no third-party
+ * analytics, so the policy blocks such a beacon rather than sending it.
  */
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com https://static.cloudflareinsights.com",
+  "script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com",
   "frame-src 'self' https://challenges.cloudflare.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob:",
-  "connect-src 'self' https://challenges.cloudflare.com https://cloudflareinsights.com",
+  "connect-src 'self' https://challenges.cloudflare.com",
   "media-src 'self' blob:",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -115,10 +117,11 @@ async function forward(request: Request, url: URL): Promise<Response> {
         : await serverRequest(target, { method: request.method, headers, body });
   } catch (e) {
     console.warn(`[api] ${request.method} ${url.pathname}: ${(e as Error).message}`);
-    return new Response(JSON.stringify({ detail: "The AnotherNote server could not be reached" }), {
-      status: 503,
-      headers: { "Content-Type": "application/json", "X-AnotherNotes-Unreachable": "1" },
-    });
+    // No answer at all: fail the request the way Chromium does when offline (the page's fetch
+    // rejects with a TypeError), so the web app's offline handling applies - the save line's
+    // "Offline - will save when you're back", a picture's "check your connection", the notes
+    // writer's retry on reconnect. protocol.handle turns Response.error() into net::ERR_FAILED.
+    return Response.error();
   }
   console.log(`[api] ${request.method} ${url.pathname} -> ${response.status}`);
   if (response.status < 400 && changesLists(request.method, url.pathname, body)) appEvents.emit("lists-changed");
@@ -192,8 +195,8 @@ function replay(answer: Buffered, how?: string): ServerResponse {
 }
 
 /**
- * Whether a request changes what the web app's lists show: its sidebar, dashboard and
- * folders. Only these make the app refresh the pages that are out of sight; a note's
+ * Whether a request changes what the web app's lists show: its sidebar, dashboard, sticky
+ * wall and folders. Only these make the app refresh the pages that are out of sight; a note's
  * text being saved, a quiz answer or a lesson's audio does not.
  */
 function changesLists(method: string, pathname: string, body?: Uint8Array): boolean {
@@ -208,8 +211,12 @@ function changesLists(method: string, pathname: string, body?: Uint8Array): bool
       return false;
     }
   }
-  if (pathname === "/api/study-sessions/create-with-ai") return method === "POST";
+  if (pathname === "/api/study-sessions/create-with-ai" || pathname === "/api/study-sessions/from-youtube") {
+    return method === "POST";
+  }
   if (/^\/api\/study-sessions\/[^/]+$/.test(pathname)) return method === "DELETE";
+  // Sticky notes: the dashboard shows the latest six, the Sticky wall page all of them.
+  if (/^\/api\/sticky-notes(\/|$)/.test(pathname)) return true;
   return /^\/api\/folders(\/|$)/.test(pathname);
 }
 

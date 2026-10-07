@@ -22,7 +22,7 @@ The window is a Mac app's, not a browser's. There is no title bar: as in Notion,
 app's sidebar runs the full height with the window buttons on it, and the app's own tab
 bar sits over the content column, starting where the sidebar ends and following it as it
 is resized or folded. Tabs are for notes and learning sessions only, named after the
-note (as its title is typed). The dashboard, folders, calendar and profile live in one
+note (as its title is typed). The dashboard, folders, the sticky wall, calendar and profile live in one
 home page behind the tabs, shown from the sidebar or the Go menu, never as a tab.
 Opening a note or session from anywhere gives it a tab, or brings its tab forward, and
 leaves the page it was opened from as it was. The + button and ⌘N start a new note in
@@ -107,6 +107,41 @@ icons, the flush and resizable sidebar and Help & support lived on `feature/Sept
 ANOTHERNOTES_WEB_REF=feature/September scripts/build-renderer.sh        # the .web/ clone
 ANOTHERNOTES_WEB_DIR=../playstudy-card-dash scripts/build-renderer.sh   # a checkout on that branch
 ```
+
+## Dictation: the Mac's own speech recognition
+
+In a browser, dictation and Teach mode use the browser's recogniser, which streams the
+words as they are said. Electron's Chromium has that API but not Google's service behind
+it, so the app used to record the microphone in pieces and send each to the server's
+whisper: the first words took many seconds to land, and a busy server a minute.
+
+The app now has a speech helper of its own, `helpers/speech/main.swift`: Apple's Speech
+framework, on this Mac whenever the language's model is installed (Dictation in System
+Settings installs it), Apple's server otherwise. `scripts/build-speech-helper.sh` compiles
+it into `build/helpers/anothernote-speech` (universal; `npm run build` runs it, and it
+needs the Xcode command line tools), electron-builder packages it into
+`Contents/Resources` and signs it with the app, and the main process runs it
+(`src/main/speech.ts`). The preload then installs `window.SpeechRecognition` over it
+(`src/preload/index.ts`), so the web app's dictation runs as it does in Chrome: live words
+at the caret, a phrase finished at the first pause. The web app only has to know the
+recogniser is real (`window.anothernotes.speech.native`, `lib/guide/speech.ts` in the web
+repo).
+
+On a note, dictation is push-to-talk, the way Wispr Flow works: hold the talk key (or
+press Dictate), talk, let go. The words are heard on the Mac while you talk and drawn at
+the caret, muted; nothing in the note changes yet. When you let go, the whole take goes to
+`POST /api/notes/{id}/structure/stream` (a fast model), and the notes it writes (headings,
+lists, bold) appear at the caret as they stream in, then go into the note as one edit. A
+quick tap instead of a hold leaves the microphone on until the next press.
+
+Without the helper (no Swift compiler, or the Linux build) nothing changes: the web app
+records for the server as before. `npm start` (Electron from `node_modules`) runs the helper
+too, but Electron's own `Info.plist` has no speech-recognition usage description, so macOS
+refuses it there and the web app falls back to recording; use `npm run mac` to try it.
+The first use asks for the microphone and for speech recognition (one dialog each).
+`ANOTHERNOTES_SPEECH_ONDEVICE=0` forces Apple's server recogniser;
+`ANOTHERNOTES_SPEECH_QUIET_MS` sets the pause that ends a phrase (default 800). The
+terminal says which it is using (`[speech] on this Mac` or `Apple's server`).
 
 ## Building the DMG
 
@@ -214,9 +249,17 @@ can be landed in the pencil holder), and the pencil holder watches the pointer, 
 the caret while a name is typed and closes its eyes while a password is. A wrong
 password gets a head shake; a right one sends a paper plane off from the button while
 the dashboard loads out of sight, and the dashboard takes the screen's place once it has
-drawn, with nothing blank in between. The loading screen before it is a pencil writing a
-note while a paper plane circles it. Both follow the system's light or dark appearance,
-and hold still for anyone who has asked macOS to reduce motion. It
+drawn, with nothing blank in between. The sign-in screen follows the system's light or
+dark appearance. The loading screen before it (`static/loading.html`) is a little pixel
+computer shaped like AnotherNote's folded page: a note is typed on its screen, the note's
+lines turn into a smiley, and "Welcome to AnotherNote" is written out underneath; then
+the pictures listed in it (files in `static/loading/`, see the README there) play on the
+computer's screen. The page says when its intro is over (`static/loading.js`), and the app
+opens then, or once its first page has loaded if that is later: at most 10 s
+(`SPLASH_INTRO_MAX_MS` in `src/main/windows.ts`). A click on the computer, or Esc, Return
+or Space, skips it. It plays once per run, at launch; a window reopened from the Dock opens
+straight away. Both hold still for anyone who has asked macOS to reduce motion. The
+sign-in screen
 signs in against the same endpoints the website uses, from the main process
 (`src/main/signin.ts`):
 
@@ -320,7 +363,9 @@ src/preload/index.ts    window.anothernotes = { platform, version, auth }; repor
 src/preload/toolbar.ts  the tab bar's bridge: what to draw in, what was clicked out
 static/toolbar.html     the tab bar: back, forward, the tabs, new tab
 static/signin.html      the app's sign-in screen: email and password, a child's PIN, or the browser
-static/loading.html     the loading screen shown while the first page loads
+static/loading.html     the loading screen shown while the first page loads (pixel computer, smiley, welcome)
+static/loading.js       plays the pictures on the loading screen's computer
+static/loading/         the pictures for it (placeholders until they are added)
 static/offline.html     shown when the server cannot be reached or is being updated; retries on its own
 scripts/run-mac.sh      build and run in one command (see above)
 scripts/build-renderer.sh  build the web app into renderer/
