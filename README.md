@@ -285,6 +285,12 @@ because Chromium would otherwise refuse the refresh cookie and the app would for
 session after 15 minutes. The terminal prints each cookie the app stores or removes, by
 name, never by value, and `session cookie stored` after a sign-in.
 
+On disk the cookie jar is encrypted with a key in the macOS Keychain ("Tutornote Safe
+Storage"), as Chrome's is, and the packaged app cannot be run as plain Node or opened to a
+debugger by another program, so neither can lift the session or use the microphone
+permission: Electron's fuses, `electronFuses` in `electron-builder.config.cjs`. `npm start`
+runs Electron from node_modules, which has none of this.
+
 ## Signing in through the browser
 
 Google refuses to sign in inside an Electron window, and the browser is where a student

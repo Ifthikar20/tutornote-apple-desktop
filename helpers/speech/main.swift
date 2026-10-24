@@ -41,7 +41,64 @@
 import AVFoundation
 import Darwin
 import Foundation
+import Security
 import Speech
+
+// MARK: - Only for Tutornote
+
+/*
+  The helper is its own responsible process (below), so once someone has allowed the
+  microphone and speech recognition, the permission is the helper's: any program that ran
+  it could listen through it and read what is said. So it runs only for the Tutornote app:
+  its parent (the disclaimed copy's grandparent) must be signed as app.tutornote.desktop by
+  the same team as the helper itself. A development build signed ad hoc has no team; then
+  the identifier alone, or Electron's own (npm start), will do.
+*/
+let TUTORNOTE_ID = "app.tutornote.desktop"
+
+func parentPid(of pid: pid_t) -> pid_t {
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return 0 }
+    return info.kp_eproc.e_ppid
+}
+
+/// The Team ID this helper is signed with, or nil (signed ad hoc, or not at all).
+func ownTeam() -> String? {
+    var me: SecCode?
+    guard SecCodeCopySelf([], &me) == errSecSuccess, let me else { return nil }
+    var file: SecStaticCode?
+    guard SecCodeCopyStaticCode(me, [], &file) == errSecSuccess, let file else { return nil }
+    var info: CFDictionary?
+    guard SecCodeCopySigningInformation(file, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+          let fields = info as? [String: Any]
+    else { return nil }
+    return fields[kSecCodeInfoTeamIdentifier as String] as? String
+}
+
+func signed(_ pid: pid_t, as requirement: String) -> Bool {
+    var code: SecCode?
+    let guest = [kSecGuestAttributePid: NSNumber(value: pid)] as CFDictionary
+    guard SecCodeCopyGuestWithAttributes(nil, guest, [], &code) == errSecSuccess, let code else { return false }
+    var req: SecRequirement?
+    guard SecRequirementCreateWithString(requirement as CFString, [], &req) == errSecSuccess, let req else { return false }
+    return SecCodeCheckValidity(code, [], req) == errSecSuccess
+}
+
+func refuseUnlessLaunchedByTutornote() {
+    let disclaimed = ProcessInfo.processInfo.environment[DISCLAIMED_ENV] != nil
+    let app = disclaimed ? parentPid(of: getppid()) : getppid()
+    let requirements: [String]
+    if let team = ownTeam() {
+        requirements = ["identifier \"\(TUTORNOTE_ID)\" and anchor apple generic and certificate leaf[subject.OU] = \"\(team)\""]
+    } else {
+        requirements = ["identifier \"\(TUTORNOTE_ID)\"", "identifier \"com.github.Electron\""]
+    }
+    if app > 1 && requirements.contains(where: { signed(app, as: $0) }) { return }
+    log("[speech] not started by the Tutornote app (process \(app)): refusing to listen")
+    exit(1)
+}
 
 // MARK: - Its own responsible process
 
@@ -526,6 +583,7 @@ enum Sessions {
     }
 }
 
+refuseUnlessLaunchedByTutornote()
 runDisclaimedIfNeeded()
 
 // Stdin on its own thread; everything else on the main queue. The pipe closing (the app

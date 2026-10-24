@@ -39,7 +39,7 @@ built=()
 for arch in arm64 x86_64; do
   # The Info.plist goes INSIDE the binary: macOS reads the helper's reasons for the
   # microphone and speech recognition from it (main.swift, "Its own responsible process").
-  if xcrun swiftc -O -target "$arch-apple-macos$MIN_MACOS" -framework Speech -framework AVFoundation \
+  if xcrun swiftc -O -target "$arch-apple-macos$MIN_MACOS" -framework Speech -framework AVFoundation -framework Security \
        -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$PLIST" \
        -o "$TMP/$arch" "$SRC" 2>"$TMP/$arch.log"; then
     built+=("$TMP/$arch")

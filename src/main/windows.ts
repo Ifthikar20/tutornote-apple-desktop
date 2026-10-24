@@ -11,7 +11,7 @@ import {
   type WebContents,
 } from "electron";
 import path from "node:path";
-import { APP_ORIGIN, APP_URL, originOf, SITE_ORIGIN, WEBSITE_URL } from "./config";
+import { API_ORIGIN, APP_ORIGIN, APP_URL, originOf, SITE_ORIGIN, WEBSITE_URL } from "./config";
 import { appEvents } from "./events";
 import { openExternal } from "./links";
 import { watchLessonAudio } from "./media";
@@ -1171,8 +1171,17 @@ function wirePage(win: BrowserWindow, page: Page): void {
     else destroyPage(page);
   };
 
+  /*
+    A round trip goes where the servers send it and nowhere else: a redirect may take it to
+    any https host (the provider, a school's sign-in), and the pages on the way may post
+    their own forms there and back to our server; a link on them to any other site opens in
+    the browser, so no other site ever loads in the app's window (it has no address bar to
+    tell it from the app).
+  */
   let roundTrip = false;
-  const guard = (event: { preventDefault(): void }, url: string): void => {
+  const tripHosts = new Set<string>();
+  const ownHosts = [hostOf(SITE_ORIGIN), hostOf(API_ORIGIN)];
+  const guard = (event: { preventDefault(): void }, url: string, redirect: boolean): void => {
     if (isAppUrl(url)) {
       const where = pathOf(url);
       if (where && SIGN_IN_PATHS.has(where)) {
@@ -1186,6 +1195,8 @@ function wirePage(win: BrowserWindow, page: Page): void {
         return;
       }
       roundTrip = startsRoundTrip(url);
+      tripHosts.clear();
+      for (const own of ownHosts) tripHosts.add(own);
       return;
     }
     const host = hostOf(url);
@@ -1195,12 +1206,16 @@ function wirePage(win: BrowserWindow, page: Page): void {
       if (shown(page)) explainGoogleSignIn(win);
       return;
     }
-    if (roundTrip && /^https:/i.test(url)) return; // a provider's page on the way back to the app
+    // a provider's page on the way back to the app
+    if (roundTrip && /^https:/i.test(url) && (redirect || tripHosts.has(host))) {
+      tripHosts.add(host);
+      return;
+    }
     event.preventDefault();
     if (shown(page)) openExternal(url);
   };
-  contents.on("will-navigate", (event, url) => guard(event, url));
-  contents.on("will-redirect", (event, url) => guard(event, url));
+  contents.on("will-navigate", (event, url) => guard(event, url, false));
+  contents.on("will-redirect", (event, url) => guard(event, url, true));
   /*
     The web app's notes saver refuses to unload while a save has failed and words are still
     unsaved (useSheetSaver onBeforeUnload); it has already kept them in this Mac's draft and

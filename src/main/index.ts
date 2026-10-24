@@ -1,4 +1,6 @@
 import { app, BrowserWindow, ipcMain, session, systemPreferences, type IpcMainInvokeEvent } from "electron";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { beginBrowserSignIn, cancelBrowserSignIn, deepLinksIn, handleDeepLink, registerProtocol } from "./auth";
 import {
   API_ORIGIN,
@@ -65,6 +67,11 @@ if (!app.requestSingleInstanceLock()) {
   app.on("web-contents-created", (_event, contents) => {
     // No <webview> tags: the app has one page, the web app.
     contents.on("will-attach-webview", (event) => event.preventDefault());
+    // No Bluetooth devices either: unhandled, Electron would hand a page the first one found.
+    contents.on("select-bluetooth-device", (event, _devices, callback) => {
+      event.preventDefault();
+      callback("");
+    });
   });
 
   app.on("window-all-closed", () => {
@@ -113,6 +120,34 @@ if (!app.requestSingleInstanceLock()) {
       }
       callback(permission === "clipboard-sanitized-write" || permission === "fullscreen" || permission === "notifications");
     });
+    // The same rule for a page asking whether it has a permission (navigator.permissions,
+    // and what Chromium checks before a device or a feature): yes only for the app's origin
+    // and what the requests above can grant. Devices (HID, serial, USB) are never granted,
+    // and their choosers close with nothing chosen.
+    session.defaultSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
+      let origin = "";
+      try {
+        origin = originOf(requestingOrigin);
+      } catch {
+        /* no origin: refused below */
+      }
+      if (origin !== APP_ORIGIN) return false;
+      if (permission === "media") return details.mediaType !== "video";
+      return permission === "clipboard-sanitized-write" || permission === "fullscreen" || permission === "notifications";
+    });
+    session.defaultSession.setDevicePermissionHandler(() => false);
+    session.defaultSession.on("select-hid-device", (event, _details, callback) => {
+      event.preventDefault();
+      callback();
+    });
+    session.defaultSession.on("select-serial-port", (event, _ports, _contents, callback) => {
+      event.preventDefault();
+      callback("");
+    });
+    session.defaultSession.on("select-usb-device", (event, _details, callback) => {
+      event.preventDefault();
+      callback();
+    });
 
     // Tell the API which client this is, on every request to the site and to the API.
     const origins = [...new Set([SITE_ORIGIN, API_ORIGIN])].map((origin) => `${origin}/*`);
@@ -131,11 +166,12 @@ if (!app.requestSingleInstanceLock()) {
       if (cookie.name === SESSION_COOKIE) void session.defaultSession.cookies.flushStore();
     });
 
-    // The bridge's few calls, from the app's own pages only (the sign-in screen is a
-    // file of ours; the web app is the app's origin).
+    // The bridge's few calls, from the app's own pages only: its own files (static/: the
+    // sign-in screen, the offline page), never any other file, and the web app at its origin.
+    const ownPages = `${pathToFileURL(path.join(app.getAppPath(), "static")).href}/`;
     const trusted = (event: IpcMainInvokeEvent): boolean => {
       const url = event.senderFrame?.url ?? "";
-      return url.startsWith("file://") || url === APP_ORIGIN || url.startsWith(`${APP_ORIGIN}/`);
+      return url.startsWith(ownPages) || url === APP_ORIGIN || url.startsWith(`${APP_ORIGIN}/`);
     };
     ipcMain.handle("auth:sign-in-with-browser", (event) => {
       if (!trusted(event)) throw new Error("not allowed");

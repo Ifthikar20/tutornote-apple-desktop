@@ -72,8 +72,26 @@ const isProxied = (pathname: string): boolean =>
 export function installRenderer(): void {
   protocol.handle(APP_SCHEME, (request) => {
     const url = new URL(request.url);
-    return isProxied(url.pathname) ? forward(request, url) : serve(url.pathname);
+    if (!isProxied(url.pathname)) return serve(url.pathname);
+    if (fromAnotherSite(request)) {
+      console.warn(`[api] ${request.method} ${url.pathname}: refused, made by another site's page`);
+      return new Response("Forbidden", { status: 403 });
+    }
+    return forward(request, url);
   });
+}
+
+/**
+ * A request for the server made by another site's page inside the app: a frame in the web
+ * app, a provider's page on a sign-in round trip. The server is reached with the app's own
+ * cookies, and the Origin header is not sent on (server.ts), so the server could not tell such
+ * a request from the web app's own: it is refused here. The web app's requests carry its own
+ * origin, or none (a top-level load such as the desktop sign-in's exchange).
+ */
+function fromAnotherSite(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (origin !== null && origin !== APP_ORIGIN) return true;
+  return request.headers.get("sec-fetch-site") === "cross-site";
 }
 
 /** A file of the bundle, or index.html for a route of the SPA. */
