@@ -16,10 +16,14 @@
         --bar: #f7f7f5; --ink: #2c2c2b; --muted: rgba(55, 53, 47, .62); --faint: rgba(55, 53, 47, .22);
         --hover: rgba(55, 53, 47, .06); --active: #ffffff; --edge: rgba(55, 53, 47, .07);
         --active-ink: var(--ink); --active-muted: var(--muted); --active-hover: var(--hover);
+        /* The buttons (back, new tab) in the web app's brand purple (--brand-accent, its
+           --accent tint for the hover, src/index.css in the web repo). */
+        --button: #7232e0; --button-hover: #5b21b6; --button-tint: #f2edfc; --button-faint: rgba(114, 50, 224, .3);
       }
       :root.dark {
         --bar: #202020; --ink: rgba(255, 255, 255, .9); --muted: rgba(255, 255, 255, .5); --faint: rgba(255, 255, 255, .2);
         --hover: rgba(255, 255, 255, .055); --active: #191919; --edge: rgba(255, 255, 255, .08);
+        --button: #a78bfa; --button-hover: #c4b5fd; --button-tint: rgba(167, 139, 250, .16); --button-faint: rgba(167, 139, 250, .3);
       }
       /* The active tab's own inks, for its fill (the page's colour), which can be light under a
          dark strip or dark under a light one (Read mode, the PDF reader at Night). */
@@ -40,11 +44,11 @@
       button, .tab { -webkit-app-region: no-drag; }
       .icon {
         display: grid; place-items: center; flex: none; align-self: center; width: 28px; height: 28px; padding: 0;
-        border: 0; border-radius: 6px; background: transparent; color: var(--muted);
+        border: 0; border-radius: 6px; background: transparent; color: var(--button);
       }
-      .icon:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+      .icon:hover:not(:disabled) { background: var(--button-tint); color: var(--button-hover); }
       .icon svg { width: 16px; height: 16px; }
-      .icon:disabled { color: var(--faint); }
+      .icon:disabled { color: var(--button-faint); }
       /* Back: one step back in the active tab, faint when there is nowhere to go. */
       #back { margin-right: 8px; }
       body.signin #back { display: none; }
