@@ -12,7 +12,7 @@ look sharp on Retina. Any other shape is cropped to fill it. PNG, JPEG, GIF, Web
 all work; a transparent picture sits on the screen's glass; a file that fails to load is
 skipped.
 
-They start once "Welcome to AnotherNote" is written (3.8 s), each for about 2.2 s, then the
+They start once "Welcome to Tutornote" is written (3.8 s), each for about 2.2 s, then the
 smiley comes back (`static/loading.js`). The app opens after every picture has played once,
 or when it has finished loading if that is later, and never more than 10 s after launch
 (`SPLASH_INTRO_MAX_MS` in `src/main/windows.ts`), so about four pictures fit. A click on

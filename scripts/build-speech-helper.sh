@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build the Mac speech helper (helpers/speech/main.swift) into build/helpers/anothernote-speech:
+# Build the Mac speech helper (helpers/speech/main.swift) into build/helpers/tutornote-speech:
 # the app runs it for dictation and Teach mode (src/main/speech.ts), and electron-builder
-# packages it into AnotherNote.app/Contents/Resources (electron-builder.config.cjs).
+# packages it into Tutornote.app/Contents/Resources (electron-builder.config.cjs).
 #
 # A universal binary (arm64 + x86_64) when the toolchain can make one, else this Mac's
 # own. Not on macOS, or without the Xcode command line tools (xcode-select --install),
@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/helpers/speech/main.swift"
 PLIST="$ROOT/helpers/speech/Info.plist"
 OUT_DIR="$ROOT/build/helpers"
-OUT="$OUT_DIR/anothernote-speech"
+OUT="$OUT_DIR/tutornote-speech"
 MIN_MACOS=12.0
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
@@ -61,5 +61,5 @@ else
 fi
 chmod +x "$OUT"
 # An ad-hoc signature so it runs from here (npm start); electron-builder signs the packaged copy.
-codesign --force --sign - --identifier app.anothernote.desktop.speech "$OUT" >/dev/null 2>&1 || true
+codesign --force --sign - --identifier app.tutornote.desktop.speech "$OUT" >/dev/null 2>&1 || true
 say "speech helper: built $OUT ($(lipo -archs "$OUT" 2>/dev/null || echo "$(uname -m)"))"

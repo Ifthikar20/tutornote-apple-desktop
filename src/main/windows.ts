@@ -21,20 +21,23 @@ import { loadWindowState, saveWindowState } from "./store";
 /*
   The main window, laid out like a Mac app rather than a browser:
 
-    ┌─ ● ● ● ───────────┬─ ‹ ›  [ Chapter 3 notes × ][ Photosynthesis ]  + ──┐  tab bar (static/toolbar.html)
-    │ the web app's      │                                                     │
-    │ sidebar, full      │   the web app's page                                │
-    │ height             │                                                     │
-    └────────────────────┴─────────────────────────────────────────────────────┘
+    ┌─ ● ● ● ───────────┬─ ‹ › │ Home │▔Chapter 3 notes▔│ Photosynthesis │ + ──┐  tab bar (static/toolbar.html)
+    │ the web app's      │                                                        │
+    │ sidebar, full      │   the web app's page                                   │
+    │ height             │                                                        │
+    └────────────────────┴────────────────────────────────────────────────────────┘
 
   There is no title bar. As in Notion, the web app's sidebar runs the full height with
   the window buttons on it, and the app's own tab bar sits over the content column,
   starting where the sidebar ends and following it as it is resized or folded away
-  (the page's preload reports the edge and makes room for the bar).
+  (the page's preload reports the edge and makes room for the bar). The bar is drawn
+  the way Notion draws its tabs: flat tabs side by side in the sidebar's tone, and the
+  active one in the page's own colour, open into the page under it.
 
-  Tabs are for notes and learning sessions only. Everything else (the dashboard,
-  folders, the sticky wall, calendar, profile) lives in one home page behind the tabs, which the sidebar
-  and the Go menu show; it is never a tab.
+  Notes and learning sessions each get a tab of their own. Everything else (the
+  dashboard, folders, the sticky wall, calendar, profile) lives in one home page, which
+  the sidebar and the Go menu show; its tab is always the first, named after the page it
+  shows, and never closes.
 
   Pages. Each is a view of the web app (a WebContentsView) in one of these roles:
 
@@ -64,7 +67,7 @@ import { loadWindowState, saveWindowState } from "./store";
 */
 
 /** The tab bar's height; the preload makes the same room in the web app's layout. */
-const TOOLBAR_HEIGHT = 44;
+const TOOLBAR_HEIGHT = 38;
 /** Room the window buttons need at the window's left edge. */
 const LIGHTS_WIDTH = 84;
 /** A new spare loads this long after the last one was taken, once the new tab has settled. */
@@ -109,10 +112,11 @@ interface Page {
   /** Loading behind the sign-in screen: called when it has drawn its layout (openAfterSignIn). */
   incoming?: () => void;
   /**
-   * Reported by the page: the sidebar's right edge (-1: no sidebar), its colour, and the
-   * backdrop of a dialog that is open ("" when none), which the tab bar dims itself with.
+   * Reported by the page: the sidebar's right edge (-1: no sidebar), its colour, the
+   * page's own colour at its top (the active tab's), and the backdrop of a dialog that is
+   * open ("" when none), which the tab bar dims itself with.
    */
-  chrome?: { right: number; background: string; dark: boolean; scrim: string };
+  chrome?: { right: number; background: string; surface: string; dark: boolean; scrim: string };
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -120,7 +124,8 @@ let toolbar: WebContentsView | null = null;
 let pages: Page[] = [];
 let activeId = 0;
 let nextPageId = 1;
-let theme: { background: string; dark: boolean } | null = null;
+/** The bar's colours: the sidebar's (the strip) and the page's (the active tab). */
+let theme: { background: string; dark: boolean; surface: string } | null = null;
 let titleTimer: NodeJS.Timeout | undefined;
 let spareTimer: NodeJS.Timeout | undefined;
 let refreshTimer: NodeJS.Timeout | undefined;
@@ -156,7 +161,7 @@ const ROUND_TRIP_PREFIXES = ["/api/auth/", "/api/sources/"];
 
 /**
  * The loading screen (static/loading.html) is an intro: its little computer types a note,
- * turns it into a smiley, writes "Welcome to AnotherNote" and plays its pictures. The page
+ * turns it into a smiley, writes "Welcome to Tutornote" and plays its pictures. The page
  * says when that is over by setting its title to SPLASH_READY_TITLE (static/loading.js),
  * so its timing lives in the page, counted from its own first paint; the app opens then,
  * or when its first page has loaded if that is later. The intro gets at most
@@ -164,7 +169,7 @@ const ROUND_TRIP_PREFIXES = ["/api/auth/", "/api/sources/"];
  * (no hang). It plays once per run, at launch: a window reopened later (the Dock, a link,
  * a menu item) opens as soon as its page has loaded.
  */
-const SPLASH_READY_TITLE = "AnotherNote:ready";
+const SPLASH_READY_TITLE = "tutornote:ready";
 const SPLASH_INTRO_MAX_MS = 10000;
 const SPLASH_MAX_MS = 15000;
 let splashShown = false;
@@ -180,7 +185,7 @@ function createSplash(): BrowserWindow {
     maximizable: false,
     fullscreenable: false,
     show: false,
-    title: "Opening AnotherNote…",
+    title: "Opening Tutornote…",
     backgroundColor: "#ffffff",
     // The intro's timers must run on time even while the window is coming up behind others.
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
@@ -214,7 +219,7 @@ const isAppUrl = (url: string): boolean => {
  * sends a signed-out user to /auth, and its sign-out lands there too. The landing page
  * is the website's front door, so the app goes to the dashboard (or sign-in) instead.
  */
-const SIGN_IN_PATHS = new Set(["/auth", "/kids"]);
+const SIGN_IN_PATHS = new Set(["/auth"]);
 
 /**
  * The website's own pages (the web repo's scripts/site-routes.mjs PUBLIC_PAGES). A link to
@@ -268,10 +273,11 @@ function routeLabel(url: string): string {
   if (where.startsWith("/dashboard/folder/")) return "Folder";
   if (where === "/dashboard/calendar") return "Calendar";
   if (where === "/dashboard/profile") return "Profile";
-  if (where.startsWith("/dashboard/family")) return "Family";
+  if (where === "/dashboard/plan") return "Plan";
+  if (where === "/dashboard/stats") return "Stats";
   if (where === "/dashboard/help") return "Help";
   if (where === "/dashboard/search") return "Search";
-  return "AnotherNote";
+  return "Tutornote";
 }
 
 /**
@@ -394,6 +400,7 @@ export function openAfterSignIn(url: string): void {
       }
       next.role = "home";
       next.lastUrl = isAppUrl(next.view.webContents.getURL()) ? next.view.webContents.getURL() : APP_URL;
+      next.title = routeLabel(next.lastUrl);
       next.view.webContents.setAudioMuted(false);
       sendRole(next);
       if (pages.includes(screen) && screen !== next) destroyPage(screen);
@@ -423,11 +430,15 @@ export function newTab(): void {
   openNote(new URL("/dashboard/note/new", APP_ORIGIN).toString());
 }
 
-/** Close the active note's tab; on the home page, close the window. */
+/**
+ * Close the active note's tab. The home page's tab never closes: on it, the window closes
+ * when it is the only tab (as it did when the home page was not a tab), and otherwise
+ * nothing happens, so the notes open beside it are never lost to a ⌘W meant for a tab.
+ */
 export function closeActiveTab(): void {
   const page = activePage();
   if (page?.role === "note") closeTab(page.id);
-  else getMainWindow()?.close();
+  else if (noteTabs().length === 0) getMainWindow()?.close();
 }
 
 /** The next (1) or previous (-1) tab, the home page first, wrapping around. */
@@ -448,11 +459,11 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    title: "AnotherNote",
+    title: "Tutornote",
     backgroundColor: "#fff9f0",
     // No title bar: the window buttons sit in the app's own tab bar.
     ...(process.platform === "darwin"
-      ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 16, y: 15 } }
+      ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 16, y: TOOLBAR_HEIGHT / 2 - 7 } }
       : {}),
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
@@ -617,7 +628,7 @@ function newPage(role: Role, url: string | null): Page {
     key: role === "note" && url ? noteKey(url) : null,
     lastUrl: url ?? "",
     view,
-    title: url ? routeLabel(url) : "AnotherNote",
+    title: url ? routeLabel(url) : "Tutornote",
     signIn: false,
     booted: false,
     audible: false,
@@ -766,7 +777,7 @@ function leave(page: Page): void {
 function toSpare(page: Page): void {
   page.role = "spare";
   page.key = null;
-  page.title = "AnotherNote";
+  page.title = "Tutornote";
   page.clearHistory = false;
   page.view.setVisible(false);
   page.view.webContents.setAudioMuted(true);
@@ -789,6 +800,7 @@ function becomeHome(page: Page, route: string, previous?: Page): void {
   page.role = "home";
   page.key = null;
   page.lastUrl = route;
+  page.title = routeLabel(route);
   page.view.webContents.setAudioMuted(false);
   sendRole(page);
   if (previous && previous !== page) {
@@ -807,6 +819,7 @@ function becomeHome(page: Page, route: string, previous?: Page): void {
 /** The home page opened a note by itself (a button): it becomes that note's tab, and the spare (or a new page) the home page. */
 function becomeTab(page: Page, key: string, url: string): void {
   const route = page.lastUrl || APP_URL;
+  const homeTitle = page.title;
   page.role = "note";
   page.key = key;
   page.lastUrl = url;
@@ -819,13 +832,17 @@ function becomeTab(page: Page, key: string, url: string): void {
   if (spare) {
     spare.role = "home";
     spare.lastUrl = route;
+    spare.title = homeTitle; // the same route: the home tab keeps its name
     spare.view.webContents.setAudioMuted(false);
     sendRole(spare);
     if (!spare.booted || spare.stale) reloadPage(spare);
     else if (pathOf(spare.view.webContents.getURL()) !== pathOf(route)) {
       spare.clearHistory = true;
       navigateInPage(spare, route);
-    } else spare.view.webContents.navigationHistory.clear();
+    } else {
+      spare.view.webContents.navigationHistory.clear();
+      refreshSoon(spare);
+    }
   } else {
     newPage("home", route);
   }
@@ -955,8 +972,8 @@ function pruneForward(page: Page): void {
 /** The bar is always there: over the notes, and over the sign-in screen as its one tab. */
 const toolbarVisible = (): boolean => Boolean(activePage());
 
-/** The sign-in screen's bar: light, like the screen, whatever the web app last had. */
-const SIGN_IN_THEME = { background: "rgb(247, 247, 245)", dark: false };
+/** The sign-in screen's bar: light, like the screen, whatever the web app last had; its tab white like the screen's left half. */
+const SIGN_IN_THEME = { background: "rgb(247, 247, 245)", dark: false, surface: "rgb(255, 255, 255)" };
 
 /** Where the tab bar starts: the sidebar's edge when the page has one, else the window's. */
 const barStart = (): number => {
@@ -981,19 +998,20 @@ function layout(): void {
   }
 }
 
-/** What the tab bar draws: the tabs, whether back and forward go anywhere, its colours. */
+/** What the tab bar draws: the tabs, whether back goes anywhere, its colours. */
 function pushState(): void {
   const win = getMainWindow();
   if (!win || !toolbar || toolbar.webContents.isDestroyed()) return;
   const signIn = Boolean(activePage()?.signIn);
-  const history = signIn ? undefined : activeContents()?.navigationHistory;
   const lights = process.platform === "darwin" && !win.isFullScreen() ? LIGHTS_WIDTH : 0;
+  const home = homePage();
+  const tabs = home && !home.signIn ? [home, ...noteTabs()] : noteTabs();
   toolbar.webContents.send("tabs:state", {
-    tabs: noteTabs().map((t) => ({ id: t.id, title: t.title, active: t.id === activeId })),
+    /** The home page's tab first, then the notes'. */
+    tabs: tabs.map((t) => ({ id: t.id, title: t.title, active: t.id === activeId, home: t.role === "home" })),
     /** The sign-in screen is showing: the bar holds its one tab and nothing else. */
     signIn,
-    canGoBack: Boolean(history?.canGoBack()),
-    canGoForward: Boolean(history?.canGoForward()),
+    canGoBack: !signIn && Boolean(activeContents()?.navigationHistory.canGoBack()),
     visible: toolbarVisible(),
     /** Room to leave at the bar's left for the window buttons, where it overlaps them. */
     inset: Math.max(8, lights - barStart()),
@@ -1006,10 +1024,11 @@ function pushState(): void {
 
 async function refreshTitle(page: Page): Promise<void> {
   const contents = page.view.webContents;
-  if (page.role !== "note" || contents.isDestroyed()) return;
+  if (!shown(page) || page.signIn || contents.isDestroyed()) return;
   const url = contents.getURL();
   let title = routeLabel(url);
-  if (isAppUrl(url)) {
+  // The dashboard is "Home"; any other page by its own name (a folder's, a learner's).
+  if (isAppUrl(url) && !(page.role === "home" && pathOf(url) === "/dashboard")) {
     try {
       const read = (await contents.executeJavaScript(READ_TITLE, false)) as unknown;
       if (typeof read === "string" && read) title = read.slice(0, 120);
@@ -1023,11 +1042,18 @@ async function refreshTitle(page: Page): Promise<void> {
   }
 }
 
-/** The active page's sidebar colour becomes the bar's. */
+/** The active page's sidebar colour becomes the bar's, and its page colour the active tab's. */
 function adoptTheme(): void {
-  const chrome = activePage()?.chrome;
+  const page = activePage();
+  // The sign-in screen has its own (it never reports): not the web app's it replaced, whose
+  // report is still on the page until the screen's document comes in.
+  if (page?.signIn) {
+    theme = SIGN_IN_THEME;
+    return;
+  }
+  const chrome = page?.chrome;
   if (chrome?.background && !/rgba\(0, 0, 0, 0\)|transparent/.test(chrome.background)) {
-    theme = { background: chrome.background, dark: chrome.dark };
+    theme = { background: chrome.background, dark: chrome.dark, surface: chrome.surface || theme?.surface || "" };
   }
 }
 
@@ -1054,19 +1080,17 @@ function installIpc(): void {
     else if (name === "back") {
       const history = activeContents()?.navigationHistory;
       if (history?.canGoBack()) history.goBack();
-    } else if (name === "forward") {
-      const history = activeContents()?.navigationHistory;
-      if (history?.canGoForward()) history.goForward();
     }
   });
   // A page reports where its sidebar ends, what colour it is, and an open dialog (preload).
   ipcMain.on("chrome:layout", (event, report: unknown) => {
     const page = pageOf(event.sender);
-    const r = (report ?? {}) as { right?: unknown; background?: unknown; dark?: unknown; scrim?: unknown };
+    const r = (report ?? {}) as { right?: unknown; background?: unknown; surface?: unknown; dark?: unknown; scrim?: unknown };
     if (!page || typeof r.right !== "number" || !Number.isFinite(r.right)) return;
     page.chrome = {
       right: Math.max(-1, Math.min(4000, Math.round(r.right))),
       background: typeof r.background === "string" ? r.background.slice(0, 64) : "",
+      surface: typeof r.surface === "string" ? r.surface.slice(0, 64) : "",
       dark: r.dark === true,
       scrim: typeof r.scrim === "string" ? r.scrim.slice(0, 64) : "",
     };
@@ -1334,14 +1358,14 @@ function explainGoogleSignIn(win: BrowserWindow): void {
 /** Chromium's error names, in words a student can act on. */
 const REASONS: Record<string, string> = {
   ERR_INTERNET_DISCONNECTED: "You're offline",
-  ERR_NAME_NOT_RESOLVED: "The AnotherNote server could not be found",
-  ERR_CONNECTION_REFUSED: "The AnotherNote server refused the connection",
+  ERR_NAME_NOT_RESOLVED: "The Tutornote server could not be found",
+  ERR_CONNECTION_REFUSED: "The Tutornote server refused the connection",
   ERR_CONNECTION_TIMED_OUT: "The connection timed out",
   ERR_CONNECTION_RESET: "The connection was reset",
   ERR_NETWORK_CHANGED: "Your network changed",
   ERR_PROXY_CONNECTION_FAILED: "Your proxy refused the connection",
   // A proxied request the server never answered (renderer.ts forward() fails it as a network error).
-  ERR_FAILED: "The AnotherNote server could not be reached",
+  ERR_FAILED: "The Tutornote server could not be reached",
 };
 
 function showOfflinePage(contents: WebContents, code: number, description: string, url: string): void {
@@ -1355,7 +1379,7 @@ function showMaintenancePage(contents: WebContents, url: string): void {
   void contents.loadFile(path.join(app.getAppPath(), "static", "offline.html"), {
     query: {
       url: isAppUrl(url) ? url : APP_URL,
-      title: "AnotherNote is being updated",
+      title: "Tutornote is being updated",
       why: "Back in a moment",
     },
   });

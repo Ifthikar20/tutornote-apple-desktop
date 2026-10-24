@@ -1,5 +1,5 @@
 /*
-  AnotherNote's speech helper: the Mac's own speech recognition (Apple's Speech
+  Tutornote's speech helper: the Mac's own speech recognition (Apple's Speech
   framework, on this machine whenever the language's model is installed) as a small
   line-based tool the app's main process runs (src/main/speech.ts). Commands come in on
   stdin, one JSON object per line; events go out on stdout the same way. The web app sees
@@ -169,7 +169,7 @@ final class Microphone {
         if !tapped {
             let format = input.outputFormat(forBus: 0)
             guard format.channelCount > 0, format.sampleRate > 0 else {
-                throw NSError(domain: "anothernote.speech", code: 1, userInfo: [NSLocalizedDescriptionKey: "no audio input"])
+                throw NSError(domain: "tutornote.speech", code: 1, userInfo: [NSLocalizedDescriptionKey: "no audio input"])
             }
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 guard let self = self else { return }

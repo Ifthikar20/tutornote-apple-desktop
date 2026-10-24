@@ -13,7 +13,7 @@ import { focusMainWindow, openAfterSignIn } from "./windows";
   through a link only it can use:
 
     1. beginBrowserSignIn: mint a `state` and a PKCE secret, open
-       https://anothernote.app/desktop/sign-in?state&challenge in the system browser.
+       https://tutornote.ai/desktop/sign-in?state&challenge in the system browser.
     2. The browser signs in as usual and asks the API for a one-time code bound to the
        challenge, then opens anothernotes://auth/callback?code&state.
     3. The OS hands that link to this app (open-url on macOS, argv elsewhere).

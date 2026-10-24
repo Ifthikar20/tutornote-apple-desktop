@@ -4,7 +4,7 @@ import { contextBridge, ipcRenderer, webFrame } from "electron";
 /*
   The bridge between the web app and the desktop shell. Deliberately tiny: the web app
   can tell it is running on the desktop (window.anothernotes is undefined in a browser)
-  and which version, and it can sign in: with an email and password or a child's PIN
+  and which version, and it can sign in: with an email and password
   (signin.ts in the main process, which checks every argument), or through the browser
   (auth.ts). Nothing else is exposed, and every call is a fixed channel. This file runs
   sandboxed, with context isolation, so the page never sees Node.
@@ -72,9 +72,6 @@ contextBridge.exposeInMainWorld(
       /** Sign in with an email and password; on success the window moves to the dashboard. */
       signIn: (form: { email: string; password: string }): Promise<unknown> =>
         ipcRenderer.invoke("auth:sign-in", { email: form?.email, password: form?.password }),
-      /** Sign in to a child's profile with its username and PIN. */
-      signInWithPin: (form: { username: string; pin: string }): Promise<unknown> =>
-        ipcRenderer.invoke("auth:sign-in-with-pin", { username: form?.username, pin: form?.pin }),
       /** Sign in through the system browser; the app comes back signed in on its own. */
       signInWithBrowser: (): Promise<void> => ipcRenderer.invoke("auth:sign-in-with-browser"),
       /** Show the app's sign-in screen in this window. */
@@ -85,18 +82,58 @@ contextBridge.exposeInMainWorld(
   }),
 );
 
+/** The tab bar's height (TOOLBAR_HEIGHT in windows.ts): the room the page makes for it. */
+const BAR = 38;
+
+/** A computed colour that covers what is under it (an alpha of 1, or none given). */
+function opaque(color: string): boolean {
+  if (!color || color === "transparent") return false;
+  const rgba = color.match(/^rgba?\(([^)]*)\)$/);
+  if (rgba) {
+    const parts = rgba[1].split(/[\s,/]+/).filter(Boolean);
+    return parts.length < 4 || Number(parts[3]) >= 0.98;
+  }
+  const slash = color.match(/\/\s*([\d.]+)(%?)\s*\)$/);
+  return !slash || Number(slash[1]) / (slash[2] ? 100 : 1) >= 0.98;
+}
+
+/** Floating layers that may pass over the page's top (menus, tooltips, toasts, dialogs): never the page's colour. */
+const FLOATING = '[data-radix-popper-content-wrapper], [role="dialog"], [role="alertdialog"], [role="menu"], [role="tooltip"], [data-sonner-toaster]';
+
 /*
   The window's tab bar sits over the content column, starting where the web app's
   sidebar ends (windows.ts). The page is the only one that knows where that is, so this
   reports it, and the sidebar's colour, whenever either changes: the sidebar resized or
   folded away, the theme or a note's sheet colour switched, another page shown. -1 means
   the page has no sidebar.
-  It also reports a dialog's backdrop while one is open (a full-window layer the web app
-  dims itself with), so the tab bar, which sits above the page, can be dimmed with it.
+  It also reports the page's own colour just under the bar (the surface), which the
+  active tab takes so that it runs into the page as Notion's does: the colour of the
+  topmost opaque layer there that is the page itself, one spanning the whole content
+  column down to the window's bottom (the page column with its sheet, Read mode, the
+  PDF reader), never a card, a code block or a picture scrolled under it. And a dialog's
+  backdrop while one is open (a full-window layer the web app dims itself with), so the
+  tab bar, which sits above the page, can be dimmed with it; the surface is not read
+  again until it closes.
 */
 function reportChrome(): void {
   let last = "";
+  let surface = "";
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Topmost first, so a layer over the page (Read mode, the PDF reader) wins over the page.
+  const surfaceAt = (x: number, y: number, left: number): string => {
+    // A modal menu or dialog has switched the page's pointer events off (Radix sets them on
+    // <body>), which hides every layer from elementsFromPoint: keep what was there.
+    if (getComputedStyle(document.body).pointerEvents === "none") return surface;
+    for (const el of document.elementsFromPoint(x, y)) {
+      if (el.closest(FLOATING)) continue;
+      const color = getComputedStyle(el).backgroundColor;
+      if (!opaque(color)) continue;
+      const box = el.getBoundingClientRect();
+      if (box.left <= left + 2 && box.right >= innerWidth - 2 && box.top <= y && box.bottom >= innerHeight - 2) return color;
+    }
+    const page = getComputedStyle(document.body).backgroundColor;
+    return opaque(page) ? page : surface;
+  };
   const report = (): void => {
     timer = undefined;
     const sidebar = document.querySelector('[data-sidebar="sidebar"]');
@@ -118,7 +155,14 @@ function reportChrome(): void {
         break;
       }
     }
-    const state = { right, background, scrim, dark: document.documentElement.classList.contains("dark") };
+    // Under where the first tabs are: the page starts below the bar in the sidebar layout,
+    // and at its own top without one (windows.ts lays it out below the bar then).
+    if (!scrim && document.body) {
+      const left = Math.max(right, 0);
+      surface = surfaceAt(Math.min(innerWidth - 1, left + 160), right >= 0 ? BAR + 6 : 6, left);
+    }
+    if (location.protocol === "app:" && sidebarSettled === null) settleSidebar();
+    const state = { right, background, surface, scrim, dark: document.documentElement.classList.contains("dark") };
     const key = JSON.stringify(state);
     if (key === last) return;
     last = key;
@@ -318,10 +362,17 @@ if (location.protocol === "app:") {
             if (k === "max-age") expires = Date.now() + Number(v) * 1000;
             else if (k === "expires" && expires === null) expires = Date.parse(v);
           }
+          // The desktop is making this page's sidebar follow another page's fold or unfold
+          // (followSidebar): that choice is in the jar already, and saving it again from here
+          // would send it round the other pages once more.
+          const root = document.documentElement;
+          if (name === "sidebar:open" && root.hasAttribute("data-an-following")) return;
           const jar = live(load());
           if (expires !== null && (Number.isNaN(expires) || expires <= Date.now())) delete jar[name];
           else jar[name] = { value, expires };
           save(jar);
+          // This page's own choice, which its sidebar already shows (settleSidebar).
+          if (name === "sidebar:open") root.setAttribute("data-an-sidebar-chose", jar[name] ? JSON.stringify(jar[name]) : "");
         },
       });
     },
@@ -334,28 +385,28 @@ if (location.protocol === "app:") {
   selectors are the sidebar component's: its header, above whose brand block the window
   buttons sit and whose strip moves the window; its edge strip, which folds and resizes
   the sidebar and must never drag the window instead; and the content column, which
-  starts below the tab bar (44px, TOOLBAR_HEIGHT in windows.ts). The column is the
+  starts below the tab bar (BAR, TOOLBAR_HEIGHT in windows.ts). The column is the
   window's height less the bar: flush with the sidebar, as the web app lays it out now
   (variant "sidebar"), or less its card's bottom margin should it go back to the inset
   card it used to be.
 */
 const SHELL_CSS = `
   @media (min-width: 768px) {
-    .peer ~ main { margin-top: 44px !important; height: calc(100svh - 44px) !important; min-height: 0 !important; }
-    .peer[data-variant="inset"] ~ main { height: calc(100svh - 44px - 0.5rem) !important; }
-    [data-sidebar="header"] { padding-top: ${process.platform === "darwin" ? 40 : 8}px !important; -webkit-app-region: drag; }
+    .peer ~ main { margin-top: ${BAR}px !important; height: calc(100svh - ${BAR}px) !important; min-height: 0 !important; }
+    .peer[data-variant="inset"] ~ main { height: calc(100svh - ${BAR}px - 0.5rem) !important; }
+    [data-sidebar="header"] { padding-top: ${process.platform === "darwin" ? BAR - 4 : 8}px !important; -webkit-app-region: drag; }
     [data-sidebar="header"] :is(a, button, input, select, textarea, [role="button"], [role="combobox"], [tabindex]) {
       -webkit-app-region: no-drag;
     }
     [data-sidebar="rail"] { -webkit-app-region: no-drag; }
     /* The PDF full-page reader (web index.css .pdf-reader) fills the window; here the tab bar
-       covers its top 44px, and the window buttons and the sidebar header's drag strip sit
+       covers its top ${BAR}px, and the window buttons and the sidebar header's drag strip sit
        there too. So it starts below the bar, and it is never part of the drag strip. Its
        pages fit its own box (PdfDocument measureFit). Only in the sidebar layout, where the
        page starts at the window's top. */
-    .peer ~ main .pdf-doc.pdf-reader { top: 44px !important; -webkit-app-region: no-drag; }
-    .peer ~ main .pdf-reader-top { top: 44px !important; }
-    .peer ~ main .pdf-reader-arrow { top: calc(50% + 22px) !important; }
+    .peer ~ main .pdf-doc.pdf-reader { top: ${BAR}px !important; -webkit-app-region: no-drag; }
+    .peer ~ main .pdf-reader-top { top: ${BAR}px !important; }
+    .peer ~ main .pdf-reader-arrow { top: calc(50% + ${BAR / 2}px) !important; }
     .pdf-reader-bar, .pdf-reader-arrow { -webkit-app-region: no-drag; }
   }
 `;
@@ -412,62 +463,93 @@ function routeLinks(): void {
   );
 }
 
-if (location.protocol === "app:" || location.protocol === "http:" || location.protocol === "https:") {
-  webFrame.insertCSS(SHELL_CSS);
-  routeLinks();
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", reportChrome);
-  else reportChrome();
-}
 
 /*
   One sidebar for the window. Each tab is its own copy of the web app, which reads
-  whether its sidebar is docked, and how wide it was dragged, once, as it starts; so
-  when it is docked, folded or resized in one tab, the others follow. The dock lives in
-  the pages' shared cookie store (the localStorage one above) and the width in their
-  localStorage ("sidebar:width", ui/sidebar.tsx in the web repo): a change to either
-  reaches every other page as a storage event, and a page also checks as it comes on
-  screen (it may have started while the setting was changing). A page whose sidebar is
-  the other way docks or folds it with the web app's own ⌘B; one whose sidebar is
-  another width sets the width where the web app's own edge strip sets it, the
-  --sidebar-width of its layout's wrapper. A fold follows at once; an open only as a page
-  comes on screen and not while the sidebar is pinned somewhere (see followSidebar: a page
-  opened out of sight folds itself again and would unpin the one in use).
+  whether its sidebar is open, and how wide it was dragged, once, as it starts; so when
+  it is folded, opened or resized in one tab, the others follow. Open or folded lives in
+  the pages' shared cookie store (the localStorage one above, cookie "sidebar:open") and
+  the width in their localStorage ("sidebar:width"), both ui/sidebar.tsx in the web repo:
+  a change to either reaches every other page as a storage event.
+  The web app writes the cookie only when the student folds or opens the sidebar (never
+  on its own: a tablet-width window starting as the rail, or Teach mode folding it for its
+  board, saves nothing), so the cookie is the student's latest choice. A page matches it
+  once, when its sidebar is first drawn (a page started at a window width of 900 to 1023
+  starts as the rail whatever the choice), then whenever another page makes a new one,
+  in or out of sight, and as it comes on screen if one came while it could not follow.
+  What a page has matched is kept (sidebarSettled), so a fold of its own that saved
+  nothing (Teach mode's) stays until the student chooses again.
+  A page that is the other way presses the web app's own fold button: not a ⌘B, which the
+  PDF reader keeps for itself and a talk key set to ⌘B would take. While it does, the
+  cookie store does not save the choice again (data-an-following, above), so nothing
+  echoes back.
 */
-function followSidebar(jar: string | null, onScreen: boolean): void {
-  let docked: string | undefined;
+const SIDEBAR_OPEN_COOKIE = "sidebar:open";
+const COOKIE_JAR_KEY = "__anothernotes_cookies";
+
+/** The sidebar choice this page shows: an entry of the jar ("" for none yet), or null before its sidebar is drawn. */
+let sidebarSettled: string | null = null;
+
+/** The sidebar cookie in the shared jar, as written (value and expiry: every write differs), or "". */
+function sidebarEntry(jar: string | null): string {
   try {
-    docked = (JSON.parse(jar || "{}") as Record<string, { value?: string }>)["sidebar:docked"]?.value;
+    const entry = (JSON.parse(jar || "{}") as Record<string, unknown>)[SIDEBAR_OPEN_COOKIE];
+    return entry ? JSON.stringify(entry) : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Open (true) or fold (false) this page's sidebar for a choice made in another page. False
+ * when the page cannot follow yet: no sidebar drawn, its edge being dragged, no fold button.
+ */
+function followSidebar(entry: string): boolean {
+  let open: boolean | null = null;
+  try {
+    const value = (JSON.parse(entry) as { value?: unknown }).value;
+    if (value === "true" || value === "false") open = value === "true";
+  } catch {
+    /* not a choice: nothing to follow */
+  }
+  const state = document.querySelector(".peer[data-state]")?.getAttribute("data-state");
+  if (!state) return false;
+  if (open === null || (state === "expanded") === open) return true;
+  // This page's own edge strip is being dragged: the drag owns the sidebar until it ends.
+  if (document.querySelector('[class~="group/sidebar-wrapper"]')?.hasAttribute("data-resizing")) return false;
+  // FoldButton in AppSidebar.tsx, in both states; not the Search button (Meta+K) beside it.
+  const fold = document.querySelector<HTMLButtonElement>('[data-sidebar="sidebar"] button[aria-keyshortcuts~="Meta+B"]');
+  if (!fold) return false;
+  const root = document.documentElement;
+  root.setAttribute("data-an-following", "");
+  try {
+    fold.click();
+  } finally {
+    root.removeAttribute("data-an-following");
+  }
+  return true;
+}
+
+/** Match this page's sidebar to the student's latest choice, unless it already shows it. */
+function settleSidebar(): void {
+  let entry: string;
+  try {
+    entry = sidebarEntry(localStorage.getItem(COOKIE_JAR_KEY));
   } catch {
     return;
   }
-  if (docked !== "true" && docked !== "false") return;
-  const peer = document.querySelector(".peer[data-state]");
-  const state = peer?.getAttribute("data-state");
-  if (!state || (state === "expanded") === (docked === "true")) return;
-  // This page's own edge strip is being dragged: the drag owns the sidebar until it ends.
-  if (document.querySelector('[class~="group/sidebar-wrapper"]')?.hasAttribute("data-resizing")) return;
-  // Pinned here (dragged to a width to stay: data-pinned, ui/sidebar.tsx): never folded from outside.
-  if (docked === "false" && peer?.getAttribute("data-pinned") === "true") return;
-  if (docked === "true") {
-    // A sidebar opened by ⌘B is not pinned, and folds itself 3 s later (AUTO_FOLD_MS) when the
-    // pointer is not in it; that fold saves docked=false and clears the pin for every page,
-    // which folds the sidebar the student is using. So a page opens only as it comes on
-    // screen (only the page in use writes docked=true, and a page never hears its own
-    // writes), and not while another page is pinned: it keeps its rail, and a page loaded
-    // later starts pinned. (Not document.visibilityState: pages playing a lesson, or about
-    // to come on screen, run unthrottled and report "visible" while out of sight.)
-    if (!onScreen) return;
-    try {
-      if (localStorage.getItem(SIDEBAR_PINNED_KEY) === "1") return;
-    } catch {
-      return;
-    }
+  if (sidebarSettled !== null && entry === sidebarSettled) return;
+  // Chosen here: the sidebar already shows it.
+  if (sidebarSettled !== null && entry === document.documentElement.getAttribute("data-an-sidebar-chose")) {
+    sidebarSettled = entry;
+    return;
   }
-  window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", code: "KeyB", metaKey: true, bubbles: true, cancelable: true }));
+  if (!entry) {
+    if (document.querySelector(".peer[data-state]")) sidebarSettled = "";
+    return;
+  }
+  if (followSidebar(entry)) sidebarSettled = entry;
 }
-
-/** The sidebar dragged to a width to stay, in any page (SIDEBAR_PINNED_KEY in ui/sidebar.tsx). */
-const SIDEBAR_PINNED_KEY = "sidebar:pinned";
 
 /** The widths the web app's edge strip allows (SIDEBAR_MIN_PX and SIDEBAR_MAX_PX in ui/sidebar.tsx). */
 const SIDEBAR_WIDTH_KEY = "sidebar:width";
@@ -481,21 +563,36 @@ function followSidebarWidth(value: string | null): void {
   // Not while this page's own strip is being dragged: the drag owns the width until it ends.
   if (!wrapper || wrapper.hasAttribute("data-resizing")) return;
   const width = `${Math.round(px)}px`;
-  if (wrapper.style.getPropertyValue("--sidebar-width") !== width) wrapper.style.setProperty("--sidebar-width", width);
+  if (wrapper.style.getPropertyValue("--sidebar-width") === width) return;
+  wrapper.style.setProperty("--sidebar-width", width);
+  // Where the open sidebar ends, for what lines up with it from outside the shell (the
+  // consent card, Teach mode's reading column), as the web app's own drag sets it.
+  if (document.querySelector(".peer[data-state]")?.getAttribute("data-state") === "expanded") {
+    document.documentElement.style.setProperty("--an-sidebar-edge", width);
+  }
 }
 
 if (location.protocol === "app:") {
   window.addEventListener("storage", (event) => {
-    if (event.key === "__anothernotes_cookies") followSidebar(event.newValue, false);
-    else if (event.key === SIDEBAR_WIDTH_KEY) followSidebarWidth(event.newValue);
+    if (event.key === COOKIE_JAR_KEY) {
+      if (sidebarEntry(event.newValue) !== sidebarEntry(event.oldValue)) settleSidebar();
+    } else if (event.key === SIDEBAR_WIDTH_KEY) followSidebarWidth(event.newValue);
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
+    settleSidebar();
     try {
-      followSidebar(localStorage.getItem("__anothernotes_cookies"), true);
       followSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     } catch {
-      /* storage blocked: the page keeps the sidebar it has */
+      /* storage blocked: the page keeps the width it has */
     }
   });
+}
+
+/* Last, so that everything they use above is defined (sidebarSettled for reportChrome). */
+if (location.protocol === "app:" || location.protocol === "http:" || location.protocol === "https:") {
+  webFrame.insertCSS(SHELL_CSS);
+  routeLinks();
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", reportChrome);
+  else reportChrome();
 }

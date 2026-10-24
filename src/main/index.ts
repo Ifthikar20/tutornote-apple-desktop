@@ -23,7 +23,7 @@ import { installUpdater } from "./updater";
 import { createMainWindow, focusMainWindow, getMainWindow, setBrowserSignIn, showSignIn } from "./windows";
 
 /*
-  AnotherNote for the desktop, v0: the live web app in a window of its own.
+  Tutornote for the desktop, v0: the live web app in a window of its own.
 
   The renderer is the website, untouched. Everything native lives here in the main
   process: one window whose size and place are remembered, native menus, links to the
@@ -31,7 +31,7 @@ import { createMainWindow, focusMainWindow, getMainWindow, setBrowserSignIn, sho
   updates. See the README for what comes next.
 */
 
-app.setAppUserModelId("app.anothernote.desktop");
+app.setAppUserModelId("app.tutornote.desktop");
 
 // An error nothing caught goes to the log (the terminal the app was started from), not
 // into a dialog that stops the app until someone clicks it away.
@@ -85,7 +85,7 @@ if (!app.requestSingleInstanceLock()) {
     );
     if (BUNDLED) installRenderer();
     app.setAboutPanelOptions({
-      applicationName: "AnotherNote",
+      applicationName: "Tutornote",
       applicationVersion: app.getVersion(),
       website: WEBSITE_URL,
     });

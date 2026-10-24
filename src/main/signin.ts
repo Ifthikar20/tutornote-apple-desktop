@@ -7,7 +7,7 @@ import { openAfterSignIn } from "./windows";
   The app's own sign-in (static/signin.html). The screen is the desktop's; the account
   and the session are the same as on the site:
 
-    signin.html --ipc--> here: POST <api>/auth/login  or  /auth/child/login
+    signin.html --ipc--> here: POST <api>/auth/login
                                through server.ts, which stores the refresh cookie the
                                API sets (httpOnly, /api/auth/) in the app's jar
                          <-- {access_token}
@@ -33,13 +33,6 @@ function passwordCredentials(form: unknown): Credentials | null {
   return email && password ? { path: "/auth/login", body: { email: email.trim(), password }, kind: "password" } : null;
 }
 
-function pinCredentials(form: unknown): Credentials | null {
-  const f = (form ?? {}) as Record<string, unknown>;
-  const username = text(f.username, 64);
-  const pin = text(f.pin, 32);
-  return username && pin ? { path: "/auth/child/login", body: { username: username.trim(), pin: pin.trim() }, kind: "pin" } : null;
-}
-
 /** The API's refusal, in the words it chose; a few statuses it has no words for, in ours. */
 function refusal(status: number, data: unknown): SignInResult {
   const detail = (data as { detail?: unknown } | null)?.detail;
@@ -53,7 +46,7 @@ function refusal(status: number, data: unknown): SignInResult {
   }
   if (typeof detail === "string" && detail) return { ok: false, error: detail };
   if (status === 429) return { ok: false, error: "Too many attempts. Wait a minute and try again." };
-  if (status === 503) return { ok: false, error: "AnotherNote is being updated. Try again in a moment." };
+  if (status === 503) return { ok: false, error: "Tutornote is being updated. Try again in a moment." };
   return { ok: false, error: `Sign-in failed (${status}). Try again.` };
 }
 
@@ -74,7 +67,7 @@ async function signIn(credentials: Credentials | null): Promise<SignInResult> {
     data = await new Response(response.body).json().catch(() => null);
   } catch (e) {
     console.warn(`[anothernotes] sign-in (${credentials.kind}): ${(e as Error).message}`);
-    return { ok: false, error: "Can't reach AnotherNote. Check your connection and try again." };
+    return { ok: false, error: "Can't reach Tutornote. Check your connection and try again." };
   }
   console.log(`[anothernotes] sign-in (${credentials.kind}) -> ${response.status}`);
   const token = (data as { access_token?: unknown } | null)?.access_token;
@@ -93,9 +86,5 @@ export function installSignIn(trusted: (event: IpcMainInvokeEvent) => boolean): 
   ipcMain.handle("auth:sign-in", (event, form: unknown) => {
     if (!trusted(event)) throw new Error("not allowed");
     return signIn(passwordCredentials(form));
-  });
-  ipcMain.handle("auth:sign-in-with-pin", (event, form: unknown) => {
-    if (!trusted(event)) throw new Error("not allowed");
-    return signIn(pinCredentials(form));
   });
 }

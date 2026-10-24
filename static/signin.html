@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sign in to AnotherNote</title>
+    <title>Sign in to Tutornote</title>
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; img-src data:; media-src file: http: https:" />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap" />
     <style>
@@ -44,10 +44,6 @@
       .brand span { font-size: 19px; font-weight: 700; letter-spacing: -.02em; }
       h1 { margin: 0 0 8px; text-align: center; font-size: 30px; line-height: 1.12; font-weight: 700; letter-spacing: -.025em; }
       .sub { margin: 0 0 24px; text-align: center; color: var(--muted); font-size: 15px; line-height: 1.45; }
-      .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px; margin-bottom: 16px; border-radius: 10px; background: var(--pill); -webkit-user-select: none; user-select: none; }
-      .tab { height: 30px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 500; cursor: default; transition: background .15s, color .15s, box-shadow .15s; }
-      .tab[aria-selected="true"] { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); font-weight: 600; }
-      form[hidden] { display: none; }
       label { display: block; margin: 0 0 6px; font-size: 13px; font-weight: 500; color: var(--muted); }
       .field + label { margin-top: 12px; }
       .field {
@@ -56,7 +52,6 @@
         transition: border-color .15s, box-shadow .15s, opacity .3s;
       }
       .field:focus { border-color: var(--ink); box-shadow: 0 0 0 4px var(--focus); }
-      .pin { letter-spacing: .3em; }
       .error { min-height: 18px; margin: 10px 0 6px; color: var(--danger); font-size: 13px; line-height: 1.4; }
       .btn {
         position: relative; display: flex; width: 100%; height: 46px; align-items: center; justify-content: center; gap: 8px;
@@ -327,18 +322,13 @@
                 <rect x="176" y="316" width="98" height="22" rx="11"/>
               </g>
             </svg>
-            <span>AnotherNote</span>
+            <span>Tutornote</span>
           </div>
           <h1>Let&rsquo;s get you studying</h1>
           <p class="sub">Your notes, written up, read aloud, and turned into quizzes and flashcards.</p>
 
           <div class="choices">
-            <div class="tabs" role="tablist" aria-label="How to sign in">
-              <button class="tab" role="tab" id="tab-email" aria-controls="form-email" aria-selected="true" type="button">Email</button>
-              <button class="tab" role="tab" id="tab-pin" aria-controls="form-pin" aria-selected="false" type="button">Kid&rsquo;s PIN</button>
-            </div>
-
-            <form id="form-email" role="tabpanel" aria-labelledby="tab-email" novalidate>
+            <form id="form-email" aria-label="Sign in with your email" novalidate>
               <label for="email">Email</label>
               <input class="field" id="email" name="email" type="email" autocomplete="username" spellcheck="false" required />
               <label for="password">Password</label>
@@ -347,18 +337,9 @@
               <button class="btn primary" type="submit"><span class="spin"></span><span class="label">Sign in</span></button>
             </form>
 
-            <form id="form-pin" role="tabpanel" aria-labelledby="tab-pin" novalidate hidden>
-              <label for="username">Username</label>
-              <input class="field" id="username" name="username" type="text" autocomplete="username" spellcheck="false" autocapitalize="off" required />
-              <label for="pin">PIN</label>
-              <input class="field pin" id="pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" required />
-              <p class="error" role="alert"></p>
-              <button class="btn primary" type="submit"><span class="spin"></span><span class="label">Sign in</span></button>
-            </form>
-
             <div class="or">or</div>
             <button class="btn secondary" id="browser" type="button">
-              Continue with Google or Microsoft
+              Continue with Google or Apple
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5" /></svg>
             </button>
             <p class="terms">
@@ -377,7 +358,7 @@
         <p class="server" id="server"></p>
       </section>
 
-      <section class="show" aria-label="AnotherNote, in motion">
+      <section class="show" aria-label="Tutornote, in motion">
         <div class="pitch">
           <h2>Your notes, <em>in motion.</em></h2>
           <p>Drop in your notes, slides or a PDF. They come back written up, section by section, then read back to you a line at a time.</p>
@@ -439,7 +420,7 @@
         var formCol = document.getElementById("form-col");
         var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         var query = new URLSearchParams(location.search);
-        var SITE = /^https?:\/\//.test(query.get("site") || "") ? query.get("site").replace(/\/+$/, "") : "https://anothernote.app";
+        var SITE = /^https?:\/\//.test(query.get("site") || "") ? query.get("site").replace(/\/+$/, "") : "https://tutornote.ai";
         if (query.get("server")) document.getElementById("server").textContent = "Connected to " + query.get("server");
 
         function restart(el, name) {
@@ -538,13 +519,13 @@
           var w = measure.measureText(input.value.slice(0, input.selectionEnd == null ? input.value.length : input.selectionEnd)).width;
           return { x: r.left + pad + Math.min(w, r.width - pad * 2), y: r.top + r.height / 2 };
         }
-        ["email", "username"].forEach(function (id) {
+        ["email"].forEach(function (id) {
           var input = document.getElementById(id);
           function follow() { gaze = caretOf(input); lookAt(gaze.x, gaze.y); }
           ["focus", "input", "click", "keyup"].forEach(function (type) { input.addEventListener(type, follow); });
           input.addEventListener("blur", function () { gaze = null; lookAt(pointer.x, pointer.y); });
         });
-        ["password", "pin"].forEach(function (id) {
+        ["password"].forEach(function (id) {
           var input = document.getElementById(id);
           input.addEventListener("focus", function () { cup.classList.add("shy"); });
           input.addEventListener("input", function () { cup.classList.add("shy"); });
@@ -751,7 +732,7 @@
               if (!cup.classList.contains("shy")) {
                 cup.classList.add("shy");
                 setTimeout(function () {
-                  var typing = document.activeElement && (document.activeElement.id === "password" || document.activeElement.id === "pin");
+                  var typing = document.activeElement && document.activeElement.id === "password";
                   if (!typing) cup.classList.remove("shy");
                 }, 380);
               }
@@ -831,30 +812,14 @@
           set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
         };
 
-        var tabs = { email: document.getElementById("tab-email"), pin: document.getElementById("tab-pin") };
-        var forms = { email: document.getElementById("form-email"), pin: document.getElementById("form-pin") };
-        function select(which, focus) {
-          ["email", "pin"].forEach(function (k) {
-            tabs[k].setAttribute("aria-selected", String(k === which));
-            forms[k].hidden = k !== which;
-          });
-          store.set("signin.tab", which);
-          if (focus) {
-            var first = forms[which].querySelector(".field");
-            var next = first.value ? forms[which].querySelectorAll(".field")[1] : first;
-            next.focus();
-          }
-          fitDesk();
-        }
-        tabs.email.addEventListener("click", function () { select("email", true); });
-        tabs.pin.addEventListener("click", function () { select("pin", true); });
+        var forms = { email: document.getElementById("form-email") };
         document.getElementById("email").value = store.get("signin.email") || "";
-        document.getElementById("username").value = store.get("signin.username") || "";
-        select(store.get("signin.tab") === "pin" ? "pin" : "email", true);
+        document.getElementById(document.getElementById("email").value ? "password" : "email").focus();
+        fitDesk();
 
         if (!bridge || !bridge.signIn) {
           document.querySelectorAll("form button, form input, #browser").forEach(function (el) { el.disabled = true; });
-          forms.email.querySelector(".error").textContent = "This page only works inside the AnotherNote app.";
+          forms.email.querySelector(".error").textContent = "This page only works inside the Tutornote app.";
           return;
         }
 
@@ -908,11 +873,6 @@
           var email = document.getElementById("email").value.trim();
           store.set("signin.email", email);
           return bridge.signIn({ email: email, password: document.getElementById("password").value });
-        });
-        submit(forms.pin, function () {
-          var username = document.getElementById("username").value.trim();
-          store.set("signin.username", username);
-          return bridge.signInWithPin({ username: username, pin: document.getElementById("pin").value.trim() });
         });
 
         function browser(from) {

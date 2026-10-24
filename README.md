@@ -1,7 +1,7 @@
-# AnotherNote for the desktop
+# Tutornote for the desktop
 
-The AnotherNote app for the Mac: the web app's interface, packaged inside the app and
-served from the app's own origin, talking to the AnotherNote API. Plus what a browser
+The Tutornote app for the Mac: the web app's interface, packaged inside the app and
+served from the app's own origin, talking to the Tutornote API. Plus what a browser
 tab cannot give it: a dock icon, native menus and shortcuts, a remembered window, links
 that open in your browser, the microphone, its own signed-in session, a loading screen,
 and updates that install themselves.
@@ -9,7 +9,7 @@ and updates that install themselves.
 How it is put together:
 
 ```
- AnotherNote.app
+ Tutornote.app
  ├─ renderer/          the web app's production build (playstudy-card-dash, `vite build`)
  │                     served at app://anothernotes/…  (src/main/renderer.ts)
  ├─ /api, /img, /files forwarded to the server with the app's own cookie jar, so the
@@ -49,11 +49,10 @@ version worked and still handy for a quick look (`scripts/run-mac.sh --site`).
 You need a Mac on macOS 13 (Ventura) or later, which is the oldest macOS Electron 44 runs on. One build runs on both Apple silicon
 and Intel. The app needs an internet connection: it is the website, in a window.
 
-1. Download `AnotherNote-<version>-universal.dmg` from the repository's Releases page.
-2. Open it and drag **AnotherNote** onto **Applications**.
-3. Open AnotherNote from Applications or Spotlight. After a short loading screen the
-   app shows its own sign-in screen: an email and password, a child's username and PIN,
-   or **Continue with Google or Microsoft**, which signs you in through your browser and
+1. Download `Tutornote-<version>-universal.dmg` from the repository's Releases page.
+2. Open it and drag **Tutornote** onto **Applications**.
+3. Open Tutornote from Applications or Spotlight. After a short loading screen the
+   app shows its own sign-in screen: an email and password, or **Continue with Google or Apple**, which signs you in through your browser and
    brings you straight back. The account is the same as on the website, and everything
    syncs, because it is the same API.
 
@@ -61,11 +60,12 @@ If the build was not signed and notarised (see below), macOS says the app "canno
 opened because Apple cannot check it". Right-click the app, choose **Open**, then
 **Open** again. macOS remembers the choice.
 
-The app was called AnotherNotes until 0.1.0; it is AnotherNote now, as the product is
-(anothernote.app). The app's profile folder is named after the app, so the renamed app
-starts with a fresh profile: sign in once more, and give it the maintenance-gate key again if you use one. The old folder,
-`~/Library/Application Support/AnotherNotes`, can be deleted. What the web app and the API
-rely on keeps its spelling: the `anothernotes://` link, the `X-AnotherNotes-Client`
+The app was called AnotherNote (AnotherNotes until 0.1.0); it is Tutornote now, as the
+product is (tutornote.ai). The app's profile folder is named after the app, so the renamed app
+starts with a fresh profile: sign in once more, and give it the maintenance-gate key again if you use one. The old folders,
+`~/Library/Application Support/AnotherNote` and `AnotherNotes`, can be deleted, and so can an
+old AnotherNote.app in Applications (it answers the same sign-in link). What the web app and the API
+rely on keeps its old spelling: the `anothernotes://` link, the `X-AnotherNotes-Client`
 header, `window.anothernotes`, `app://anothernotes` and the `ANOTHERNOTES_*` variables.
 
 The first time you press Dictate or talk to the tutor, macOS asks for the microphone.
@@ -81,7 +81,7 @@ has touched), quits a copy that is already running, builds the `.app`, and start
 its logs in the terminal. Ctrl-C quits the app.
 
 ```sh
-scripts/run-mac.sh                          # against anothernote.app
+scripts/run-mac.sh                          # against tutornote.ai
 scripts/run-mac.sh http://100.49.56.40/     # against a test server
 scripts/run-mac.sh --dev http://100.49.56.40/   # from source, no .app: fastest
 scripts/run-mac.sh --renderer               # rebuild the web app bundle first
@@ -118,7 +118,7 @@ whisper: the first words took many seconds to land, and a busy server a minute.
 The app now has a speech helper of its own, `helpers/speech/main.swift`: Apple's Speech
 framework, on this Mac whenever the language's model is installed (Dictation in System
 Settings installs it), Apple's server otherwise. `scripts/build-speech-helper.sh` compiles
-it into `build/helpers/anothernote-speech` (universal; `npm run build` runs it, and it
+it into `build/helpers/tutornote-speech` (universal; `npm run build` runs it, and it
 needs the Xcode command line tools), electron-builder packages it into
 `Contents/Resources` and signs it with the app, and the main process runs it
 (`src/main/speech.ts`). The preload then installs `window.SpeechRecognition` over it
@@ -158,8 +158,8 @@ That leaves, in `release/`:
 
 | File | What it is for |
 |---|---|
-| `AnotherNote-<version>-universal.dmg` | the installer people download |
-| `AnotherNote-<version>-universal-mac.zip` | the same app, zipped, which the updater downloads |
+| `Tutornote-<version>-universal.dmg` | the installer people download |
+| `Tutornote-<version>-universal-mac.zip` | the same app, zipped, which the updater downloads |
 | `latest-mac.yml` | the update feed: version, file names, checksums |
 
 Under the hood, `npm run dist:mac` is two steps:
@@ -167,9 +167,9 @@ Under the hood, `npm run dist:mac` is two steps:
 ```
 tsc                       src/main/*.ts, src/preload/index.ts  →  dist/
 electron-builder --mac    dist/ + static/ + node_modules  →  app.asar
-                          Electron.app + app.asar + icon + Info.plist  →  AnotherNote.app
-                          AnotherNote.app  →  signed, notarised (when credentials exist)
-                          AnotherNote.app  →  .dmg  (drag to Applications), .zip, latest-mac.yml
+                          Electron.app + app.asar + icon + Info.plist  →  Tutornote.app
+                          Tutornote.app  →  signed, notarised (when credentials exist)
+                          Tutornote.app  →  .dmg  (drag to Applications), .zip, latest-mac.yml
 ```
 
 To run it without packaging, or against a local copy of the web app:
@@ -251,8 +251,8 @@ password gets a head shake; a right one sends a paper plane off from the button 
 the dashboard loads out of sight, and the dashboard takes the screen's place once it has
 drawn, with nothing blank in between. The sign-in screen follows the system's light or
 dark appearance. The loading screen before it (`static/loading.html`) is a little pixel
-computer shaped like AnotherNote's folded page: a note is typed on its screen, the note's
-lines turn into a smiley, and "Welcome to AnotherNote" is written out underneath; then
+computer shaped like Tutornote's folded page: a note is typed on its screen, the note's
+lines turn into a smiley, and "Welcome to Tutornote" is written out underneath; then
 the pictures listed in it (files in `static/loading/`, see the README there) play on the
 computer's screen. The page says when its intro is over (`static/loading.js`), and the app
 opens then, or once its first page has loaded if that is later: at most 10 s
@@ -264,7 +264,7 @@ signs in against the same endpoints the website uses, from the main process
 (`src/main/signin.ts`):
 
 ```
- sign-in screen ──ipc──▶ main process: POST /api/auth/login  (or /auth/child/login)
+ sign-in screen ──ipc──▶ main process: POST /api/auth/login
                          with the app's cookie jar: the refresh cookie the API sets
                          (httpOnly, /api/auth/) is stored for the server
                 ◀─────── {access_token}
@@ -273,7 +273,7 @@ signs in against the same endpoints the website uses, from the main process
 ```
 
 The password goes from the screen to the API and nowhere else; the web app never sees
-it. Whenever the web app sends someone to its own sign-in pages (`/auth`, `/kids`: a
+it. Whenever the web app sends someone to its own sign-in pages (`/auth`: a
 signed-out visit, or signing out), the window shows the app's screen instead, and the
 website's landing page is skipped for the dashboard.
 
@@ -291,7 +291,7 @@ Google refuses to sign in inside an Electron window, and the browser is where a 
 is usually signed in already. So the app can send them there and take the session back:
 
 ```
- desktop app                       browser: anothernote.app                identity API
+ desktop app                       browser: tutornote.ai                   identity API
  ───────────                       ────────────────────────                ────────────
  state + PKCE secret (auth.ts)
  opens /desktop/sign-in?state&challenge ─▶ sign in as usual (any method)
@@ -311,14 +311,14 @@ registered the scheme) cannot be exchanged. The browser's own session is untouch
 The web app and the API halves live in the web and backend repos (`/desktop/sign-in`,
 `identity/accounts/desktop.py`).
 
-Ways to start it: **Continue with Google or Microsoft** on the sign-in screen, **File → Sign In with Your Browser…**, the Google
+Ways to start it: **Continue with Google or Apple** on the sign-in screen, **File → Sign In with Your Browser…**, the Google
 button on the web app's sign-in page (the web app sees `window.anothernotes` and asks the
 app), and the dialog the app shows if a page tries to reach Google's sign-in anyway.
 
 The link works because the app is registered for the `anothernotes://` scheme
 (`protocols` in the builder config puts it in `Info.plist`). macOS only routes the scheme
 to a packaged app, so to try the whole round trip in development run `npm run pack` and
-open `release/mac-universal/AnotherNote.app` once; `npm start` alone can test everything
+open `release/mac-universal/Tutornote.app` once; `npm start` alone can test everything
 up to the link.
 
 ## Lessons in the window
@@ -348,7 +348,7 @@ signal.
 
 ```
 src/main/index.ts       app lifecycle: single instance, permissions, the client header, deep links, IPC
-src/main/signin.ts      the app's own sign-in: email and password, or a child's PIN, against the API
+src/main/signin.ts      the app's own sign-in: email and password, against the API
 src/main/auth.ts        sign-in through the browser: state + PKCE, the anothernotes:// link, the exchange
 src/main/renderer.ts    the bundled web app at app://anothernotes; /api, /img and /files forwarded to the server
 src/main/server.ts      requests to the server, with the app keeping the server's cookies itself
@@ -362,7 +362,7 @@ src/main/config.ts      the server, ANOTHERNOTES_URL override, bundled renderer 
 src/preload/index.ts    window.anothernotes = { platform, version, auth }; reports the sidebar's edge for the tab bar
 src/preload/toolbar.ts  the tab bar's bridge: what to draw in, what was clicked out
 static/toolbar.html     the tab bar: back, forward, the tabs, new tab
-static/signin.html      the app's sign-in screen: email and password, a child's PIN, or the browser
+static/signin.html      the app's sign-in screen: email and password, or the browser
 static/loading.html     the loading screen shown while the first page loads (pixel computer, smiley, welcome)
 static/loading.js       plays the pictures on the loading screen's computer
 static/loading/         the pictures for it (placeholders until they are added)
@@ -385,7 +385,7 @@ the desktop apart.
 - **Google sign-in** happens in your browser (above), never in the window, because
   Google refuses it there. Microsoft sign-in and "connect a note source" round-trip
   inside the window as on the web; SAML goes through the browser too.
-- **Nothing works offline** beyond the "can't reach AnotherNote" page; the app is the
+- **Nothing works offline** beyond the "can't reach Tutornote" page; the app is the
   website.
 - **Auto-update needs a signed build.**
 - Linux and Windows are not targets yet. The Linux AppImage target exists only so the

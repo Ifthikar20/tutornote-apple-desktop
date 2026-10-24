@@ -6,7 +6,7 @@ import { contextBridge, ipcRenderer } from "electron";
   their own bridge (index.ts).
 */
 
-type Command = "select" | "close" | "new" | "back" | "forward";
+type Command = "select" | "close" | "new" | "back";
 
 // Not "toolbar": the page already has a built-in window.toolbar, which cannot be replaced.
 contextBridge.exposeInMainWorld(

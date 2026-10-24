@@ -2,18 +2,29 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>AnotherNote</title>
+    <title>Tutornote</title>
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
     <style>
+      /*
+        Tabs the way Notion draws them: a strip in the sidebar's tone, flat tabs of one width
+        side by side with a hairline between them, and the active tab filled with the page's
+        own colour and open at the bottom, so it runs into the page under it. Every other
+        tab sits on the strip, above its bottom hairline.
+      */
       :root {
         color-scheme: light dark;
-        --bar: #f7f7f5; --ink: #37352f; --muted: rgba(55, 53, 47, .55); --hover: rgba(55, 53, 47, .07);
-        --active: #ffffff; --edge: rgba(55, 53, 47, .09); --shade: 0 1px 2px rgba(0, 0, 0, .06);
+        --bar: #f7f7f5; --ink: #2c2c2b; --muted: rgba(55, 53, 47, .62); --faint: rgba(55, 53, 47, .22);
+        --hover: rgba(55, 53, 47, .06); --active: #ffffff; --edge: rgba(55, 53, 47, .07);
+        --active-ink: var(--ink); --active-muted: var(--muted); --active-hover: var(--hover);
       }
       :root.dark {
-        --bar: #202020; --ink: rgba(255, 255, 255, .86); --muted: rgba(255, 255, 255, .46); --hover: rgba(255, 255, 255, .06);
-        --active: rgba(255, 255, 255, .09); --edge: rgba(255, 255, 255, .08); --shade: none;
+        --bar: #202020; --ink: rgba(255, 255, 255, .9); --muted: rgba(255, 255, 255, .5); --faint: rgba(255, 255, 255, .2);
+        --hover: rgba(255, 255, 255, .055); --active: #191919; --edge: rgba(255, 255, 255, .08);
       }
+      /* The active tab's own inks, for its fill (the page's colour), which can be light under a
+         dark strip or dark under a light one (Read mode, the PDF reader at Night). */
+      :root.active-light { --active-ink: #2c2c2b; --active-muted: rgba(55, 53, 47, .62); --active-hover: rgba(55, 53, 47, .06); }
+      :root.active-dark { --active-ink: rgba(255, 255, 255, .9); --active-muted: rgba(255, 255, 255, .5); --active-hover: rgba(255, 255, 255, .055); }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; overflow: hidden; }
       body {
@@ -22,43 +33,48 @@
         -webkit-font-smoothing: antialiased; -webkit-user-select: none; user-select: none; cursor: default;
       }
       .bar {
-        display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 8px 0 var(--lights, 8px);
-        border-bottom: 1px solid var(--edge); -webkit-app-region: drag;
+        display: flex; align-items: stretch; height: 100%; padding: 0 8px 0 var(--lights, 8px);
+        box-shadow: inset 0 -1px 0 var(--edge); -webkit-app-region: drag;
       }
-      body.over .bar { border-bottom-color: transparent; }
       body.hidden .bar { visibility: hidden; }
       button, .tab { -webkit-app-region: no-drag; }
       .icon {
-        display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0;
-        border: 0; border-radius: 6px; background: transparent; color: var(--ink);
+        display: grid; place-items: center; flex: none; align-self: center; width: 28px; height: 28px; padding: 0;
+        border: 0; border-radius: 6px; background: transparent; color: var(--muted);
       }
-      .icon:hover:not(:disabled) { background: var(--hover); }
-      .icon:disabled { color: var(--muted); opacity: .6; }
+      .icon:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
       .icon svg { width: 16px; height: 16px; }
-      .nav { display: flex; gap: 2px; margin-right: 6px; }
-      .tabs { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+      .icon:disabled { color: var(--faint); }
+      /* Back: one step back in the active tab, faint when there is nowhere to go. */
+      #back { margin-right: 8px; }
+      body.signin #back { display: none; }
+      .tabs { display: flex; align-items: stretch; min-width: 0; flex: 0 1 auto; overflow: hidden; }
       .tab {
-        position: relative; display: flex; align-items: center; gap: 6px; flex: 0 1 auto; width: 200px; min-width: 76px; height: 30px;
-        padding: 0 6px 0 12px; border-radius: 8px; color: var(--muted); overflow: hidden;
-        transition: background .12s, color .12s, width .18s ease, min-width .18s ease, padding .18s ease, opacity .14s ease;
+        position: relative; display: flex; align-items: center; gap: 6px; flex: 0 1 auto; width: 200px; min-width: 72px;
+        padding: 0 6px 0 14px; border-right: 1px solid var(--edge); color: var(--muted); overflow: hidden;
+        transition: background-color .12s, color .12s, width .18s ease, min-width .18s ease, padding .18s ease, opacity .14s ease;
       }
+      /* The first tab's left edge, where it meets the strip. */
+      .tab.first { border-left: 1px solid var(--edge); }
       /* A tab grows in as it opens and folds away as it closes, so the others slide over. */
-      .tab.entering, .tab.leaving { width: 0; min-width: 0; padding-left: 0; padding-right: 0; opacity: 0; }
+      .tab.entering, .tab.leaving { width: 0; min-width: 0; padding-left: 0; padding-right: 0; opacity: 0; border-color: transparent; }
       .tab.leaving { pointer-events: none; }
-      @media (prefers-reduced-motion: reduce) { .tab { transition: background .12s, color .12s; } }
+      @media (prefers-reduced-motion: reduce) { .tab { transition: background-color .12s, color .12s; } }
       .tab:hover { background: var(--hover); color: var(--ink); }
-      .tab.active { background: var(--active); color: var(--ink); box-shadow: var(--shade), inset 0 0 0 1px var(--edge); }
-      .tab .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 30px; }
+      .tab.active { --ink: var(--active-ink); --muted: var(--active-muted); --hover: var(--active-hover); background: var(--active); color: var(--ink); }
+      .tab .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.3; }
       .tab .close {
         display: grid; place-items: center; flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px;
         background: transparent; color: var(--muted); visibility: hidden;
       }
-      .tab:hover .close, .tab.active .close { visibility: visible; }
+      .tab:hover .close { visibility: visible; }
       .tab .close:hover { background: var(--hover); color: var(--ink); }
       .tab .close svg { width: 10px; height: 10px; }
-      #new { margin-left: 2px; }
+      /* The home page's tab: always there, first, and never closed. */
+      .tab.home .close { display: none; }
+      #new { margin-left: 6px; }
       /* Signing in: one tab of its own, with nothing to open, close or go back to. */
-      .tab.fixed { width: 150px; padding: 0 12px 0 10px; }
+      .tab.fixed { width: 150px; padding: 0 12px 0 12px; }
       .tab.fixed.entering, .tab.fixed.leaving { width: 0; padding-left: 0; padding-right: 0; }
       .tab .glyph { flex: none; width: 14px; height: 14px; border-radius: 3.5px; }
       body.signin #new { display: none; }
@@ -73,17 +89,12 @@
   <body class="hidden">
     <div class="scrim" aria-hidden="true"></div>
     <div class="bar">
-      <div class="nav">
-        <button class="icon" id="back" type="button" title="Back (⌘[)" aria-label="Back" disabled>
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3 5 8l5 5" /></svg>
-        </button>
-        <button class="icon" id="forward" type="button" title="Forward (⌘])" aria-label="Forward" disabled>
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 3 5 5-5 5" /></svg>
-        </button>
-      </div>
-      <div class="tabs" id="tabs" role="tablist" aria-label="Open notes"></div>
+      <button class="icon" id="back" type="button" title="Back (⌘[)" aria-label="Back" disabled>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3 5 8l5 5" /></svg>
+      </button>
+      <div class="tabs" id="tabs" role="tablist" aria-label="Open pages"></div>
       <button class="icon" id="new" type="button" title="New note (⌘N)" aria-label="New note">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>
       </button>
     </div>
     <script>
@@ -93,45 +104,55 @@
         var root = document.documentElement;
         var list = document.getElementById("tabs");
         var back = document.getElementById("back");
-        var forward = document.getElementById("forward");
+        back.addEventListener("click", function () { bridge.send("back"); });
         var CLOSE = '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="m2 2 6 6M8 2 2 8" /></svg>';
 
-        back.addEventListener("click", function () { bridge.send("back"); });
-        forward.addEventListener("click", function () { bridge.send("forward"); });
         document.getElementById("new").addEventListener("click", function () { bridge.send("new"); });
 
-        /* The web app's sidebar colour, so the bar reads as part of the app. */
+        /* Dark (true), light (false), or null for a colour that is not rgb(). */
+        function isDark(color) {
+          var m = /^rgba?\(/.test(color || "") && color.match(/\d+(\.\d+)?/g);
+          if (!m || m.length < 3) return null;
+          return (0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2]) / 255 < 0.5;
+        }
+
+        /* The strip in the web app's sidebar colour, the active tab in its page's colour, each
+           with inks for its own brightness. */
         function applyTheme(theme) {
           if (!theme || !theme.background) return;
-          var m = theme.background.match(/\d+(\.\d+)?/g);
-          var dark = theme.dark;
-          if (m && m.length >= 3) {
-            var lum = (0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2]) / 255;
-            dark = lum < 0.5;
-          }
-          root.classList.toggle("dark", Boolean(dark));
+          var dark = isDark(theme.background);
+          root.classList.toggle("dark", Boolean(dark === null ? theme.dark : dark));
           root.style.setProperty("--bar", theme.background);
+          if (theme.surface) root.style.setProperty("--active", theme.surface);
+          else root.style.removeProperty("--active");
+          var fill = theme.surface ? isDark(theme.surface) : null;
+          root.classList.toggle("active-dark", fill === true);
+          root.classList.toggle("active-light", fill === false);
         }
 
         /*
           The tabs are kept, not redrawn: an update changes only what changed, so a tab
           under the pointer stays hovered and a click on it is never lost to a redraw.
+          A note's tab is kept by its page; the home page's by "home", since another page
+          can take that role (the last tab closed becomes the home page) and its tab stays put.
         */
         var els = new Map();
+        var idOf = function (el) { return Number(el.dataset.id); };
 
-        function closeTab(id) {
-          var el = els.get(id);
-          if (el) fold(el, id);
-          bridge.send("close", id);
+        function closeTab(key) {
+          var el = els.get(key);
+          if (!el || el.classList.contains("home")) return;
+          fold(el, key);
+          bridge.send("close", idOf(el));
         }
 
-        function fold(el, id) {
-          els.delete(id);
+        function fold(el, key) {
+          els.delete(key);
           el.classList.add("leaving");
           setTimeout(function () { el.remove(); }, 200);
         }
 
-        function makeTab(id) {
+        function makeTab(key) {
           var el = document.createElement("div");
           el.className = "tab entering";
           el.setAttribute("role", "tab");
@@ -143,13 +164,13 @@
           close.innerHTML = CLOSE;
           // Closing is its own gesture: it must not select the tab on its way out.
           close.addEventListener("mousedown", function (e) { e.stopPropagation(); });
-          close.addEventListener("click", function (e) { e.stopPropagation(); closeTab(id); });
+          close.addEventListener("click", function (e) { e.stopPropagation(); closeTab(key); });
           el.addEventListener("mousedown", function (e) {
             if (e.button !== 0) return;
             els.forEach(function (other) { other.classList.toggle("active", other === el); });
-            bridge.send("select", id);
+            bridge.send("select", idOf(el));
           });
-          el.addEventListener("auxclick", function (e) { if (e.button === 1) closeTab(id); });
+          el.addEventListener("auxclick", function (e) { if (e.button === 1) closeTab(key); });
           el.appendChild(title);
           el.appendChild(close);
           requestAnimationFrame(function () { requestAnimationFrame(function () { el.classList.remove("entering"); }); });
@@ -181,23 +202,24 @@
         function draw(state) {
           drawSignIn(Boolean(state.signIn));
           document.body.classList.toggle("hidden", !state.visible);
-          document.body.classList.toggle("over", Boolean(state.overSidebar));
           root.style.setProperty("--lights", (state.inset || 8) + "px");
           applyTheme(state.theme);
+          back.disabled = !state.canGoBack;
           document.body.classList.toggle("modal", Boolean(state.scrim));
           if (state.scrim) root.style.setProperty("--scrim", state.scrim);
-          back.disabled = !state.canGoBack;
-          forward.disabled = !state.canGoForward;
 
           var wanted = new Set();
           var previous = null;
           state.tabs.forEach(function (tab) {
-            wanted.add(tab.id);
-            var el = els.get(tab.id);
+            var key = tab.home ? "home" : tab.id;
+            wanted.add(key);
+            var el = els.get(key);
             if (!el) {
-              el = makeTab(tab.id);
-              els.set(tab.id, el);
+              el = makeTab(key);
+              els.set(key, el);
             }
+            el.dataset.id = String(tab.id);
+            el.classList.toggle("home", Boolean(tab.home));
             el.classList.toggle("active", tab.active);
             el.setAttribute("aria-selected", String(tab.active));
             if (el.title !== tab.title) {
@@ -211,7 +233,14 @@
             if (at !== el) list.insertBefore(el, at);
             previous = el;
           });
-          els.forEach(function (el, id) { if (!wanted.has(id)) fold(el, id); });
+          els.forEach(function (el, key) { if (!wanted.has(key)) fold(el, key); });
+          // The first tab still there carries the strip's left hairline.
+          var first = true;
+          Array.prototype.forEach.call(list.children, function (el) {
+            var leaving = el.classList.contains("leaving");
+            el.classList.toggle("first", first && !leaving);
+            if (!leaving) first = false;
+          });
         }
 
         bridge.onState(draw);

@@ -1,23 +1,23 @@
 {
   "name": "anothernotes-desktop",
-  "productName": "AnotherNote",
+  "productName": "Tutornote",
   "version": "0.1.0",
-  "description": "AnotherNote for the desktop: the web app in a window of its own.",
+  "description": "Tutornote for the desktop: the web app in a window of its own.",
   "private": true,
-  "author": "AnotherNote",
+  "author": "Tutornote",
   "main": "dist/main/index.js",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && scripts/build-speech-helper.sh",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "npm run build && electron .",
     "mac": "scripts/run-mac.sh",
-    "pack": "npm run build && electron-builder --dir --config electron-builder.config.cjs",
-    "dist:mac": "npm run build && electron-builder --mac --publish never --config electron-builder.config.cjs",
-    "dist:linux": "npm run build && electron-builder --linux --publish never --config electron-builder.config.cjs",
-    "release:mac": "npm run build && electron-builder --mac --publish always --config electron-builder.config.cjs"
+    "pack": "npm run build && scripts/use-node.sh electron-builder --dir --config electron-builder.config.cjs",
+    "dist:mac": "npm run build && scripts/use-node.sh electron-builder --mac --publish never --config electron-builder.config.cjs",
+    "dist:linux": "npm run build && scripts/use-node.sh electron-builder --linux --publish never --config electron-builder.config.cjs",
+    "release:mac": "npm run build && scripts/use-node.sh electron-builder --mac --publish always --config electron-builder.config.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"

@@ -1,5 +1,5 @@
 /*
-  How the app is packaged. `npm run dist:mac` on a Mac gives release/AnotherNote-<version>-universal.dmg
+  How the app is packaged. `npm run dist:mac` on a Mac gives release/Tutornote-<version>-universal.dmg
   (drag-to-Applications installer), a .zip of the same app for the updater, and latest-mac.yml,
   the update feed. See the README for signing and notarising.
 */
@@ -10,7 +10,7 @@
 // build/helpers): packaged into Contents/Resources when it was built, and signed with the
 // app (electron-builder signs every binary it finds in the bundle, with the entitlements
 // above, which include the microphone).
-const speechHelper = require("node:path").join(__dirname, "build", "helpers", "anothernote-speech");
+const speechHelper = require("node:path").join(__dirname, "build", "helpers", "tutornote-speech");
 const hasSpeechHelper = require("node:fs").existsSync(speechHelper);
 
 const notarize = Boolean(
@@ -19,9 +19,9 @@ const notarize = Boolean(
 
 /** @type {import("electron-builder").Configuration} */
 module.exports = {
-  appId: "app.anothernote.desktop",
-  productName: "AnotherNote",
-  copyright: "Copyright © 2026 AnotherNote",
+  appId: "app.tutornote.desktop",
+  productName: "Tutornote",
+  copyright: "Copyright © 2026 Tutornote",
   directories: {
     output: "release",
     buildResources: "build",
@@ -29,7 +29,7 @@ module.exports = {
   files: ["dist/**/*", "static/**/*", "renderer/**/*", "package.json"],
   asar: true,
   // The link that brings a browser sign-in back into the app (src/main/auth.ts).
-  protocols: { name: "AnotherNote", schemes: ["anothernotes"] },
+  protocols: { name: "Tutornote", schemes: ["anothernotes"] },
   publish: {
     provider: "github",
     owner: "Ifthikar20",
@@ -50,14 +50,14 @@ module.exports = {
     notarize,
     extendInfo: {
       NSMicrophoneUsageDescription:
-        "AnotherNote uses the microphone so you can dictate notes and talk to the tutor.",
+        "Tutornote uses the microphone so you can dictate notes and talk to the tutor.",
       NSSpeechRecognitionUsageDescription:
-        "AnotherNote uses speech recognition so the words you dictate appear as you say them.",
+        "Tutornote uses speech recognition so the words you dictate appear as you say them.",
     },
-    ...(hasSpeechHelper ? { extraResources: [{ from: speechHelper, to: "anothernote-speech" }] } : {}),
+    ...(hasSpeechHelper ? { extraResources: [{ from: speechHelper, to: "tutornote-speech" }] } : {}),
   },
   dmg: {
-    title: "AnotherNote",
+    title: "Tutornote",
     contents: [
       { x: 130, y: 220 },
       { x: 410, y: 220, type: "link", path: "/Applications" },

@@ -16,7 +16,7 @@
     own cap (SPLASH_INTRO_MAX_MS) - so a long list of pictures cannot hold it up.
 */
 (() => {
-  const READY = "AnotherNote:ready";
+  const READY = "tutornote:ready";
   const FIRST_AT_MS = 3800; // the face has come (2.65 s), the welcome is written (3.3 s)
   const PICTURE_MS = 2200;
   const FACE_MS = 2200; // the smiley between rounds

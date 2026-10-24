@@ -125,6 +125,9 @@ async function forward(request: Request, url: URL): Promise<Response> {
   }
   console.log(`[api] ${request.method} ${url.pathname} -> ${response.status}`);
   if (response.status < 400 && changesLists(request.method, url.pathname, body)) appEvents.emit("lists-changed");
+  if (response.status === 200 && request.method === "GET" && UPLOAD_STATUS.test(url.pathname)) {
+    response = { ...response, body: await watchUpload(response.body) };
+  }
   const out = new Headers();
   for (const [name, value] of Object.entries(response.headers)) {
     if (!DROPPED_RESPONSE_HEADERS.has(name)) out.set(name, value);
@@ -138,6 +141,8 @@ async function forward(request: Request, url: URL): Promise<Response> {
         out.set("location", `${APP_ORIGIN}${location.slice(origin.length)}`);
       }
     }
+    const callback = signInCallbackOf(out.get("location") ?? "");
+    if (callback) out.set("location", `${APP_ORIGIN}${callback}`);
   }
   return new Response(hasBodyStatus(response.status) ? response.body : null, {
     status: response.status,
@@ -218,6 +223,44 @@ function changesLists(method: string, pathname: string, body?: Uint8Array): bool
   // Sticky notes: the dashboard shows the latest six, the Sticky wall page all of them.
   if (/^\/api\/sticky-notes(\/|$)/.test(pathname)) return true;
   return /^\/api\/folders(\/|$)/.test(pathname);
+}
+
+/**
+ * The web app's sign-in callback (/auth/callback#…) at whatever address the API's
+ * FRONTEND_URL names, as the path after it: the desktop exchange ends there, and in the
+ * app that page is the bundle's. After the rename the live API still named the old site,
+ * https://anothernote.app, which forwards to the new one's front page and loses the page
+ * and the sign-in with it, so the path decides here, not the host.
+ */
+function signInCallbackOf(location: string): string | null {
+  try {
+    const u = new URL(location);
+    return u.protocol === "https:" && u.pathname === "/auth/callback" ? `${u.pathname}${u.search}${u.hash}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/*
+  An uploaded document becomes a session after the answers, not in one: the page sends the
+  file in parts, says "finish", then asks GET /study-sessions/uploads/{id} until its state is
+  "done" (services/uploads.ts in the web repo). That answer, the first one with the new
+  session in it, is the change the lists are told about. It is a few hundred bytes of JSON,
+  so it is read whole here and handed on as it came.
+*/
+const UPLOAD_STATUS = /^\/api\/study-sessions\/uploads\/[^/]+$/;
+
+async function watchUpload(body: ReadableStream<Uint8Array> | null): Promise<ReadableStream<Uint8Array> | null> {
+  if (!body) return body;
+  const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+  try {
+    if ((JSON.parse(Buffer.from(bytes).toString("utf8")) as { state?: unknown }).state === "done") {
+      appEvents.emit("lists-changed");
+    }
+  } catch {
+    // Not JSON: nothing to learn from it.
+  }
+  return new Response(bytes).body;
 }
 
 const hasBodyStatus = (status: number): boolean => status !== 204 && status !== 304 && (status < 300 || status >= 400);

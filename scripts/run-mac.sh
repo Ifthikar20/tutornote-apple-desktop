@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build AnotherNote for the Mac and open it, with its logs in this terminal.
+# Build Tutornote for the Mac and open it, with its logs in this terminal.
 #
 #   scripts/run-mac.sh                          the live site, packaged .app
 #   scripts/run-mac.sh http://100.49.56.40/     a test server instead
@@ -34,31 +34,9 @@ done
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 
-# 1. Node 22 or later (Electron 44 needs it). Use nvm and .nvmrc if the shell has an older one.
-#    nvm refuses to run while npm_config_prefix (or PREFIX) is set, which some shell
-#    profiles and conda environments do; this script has no use for either, so they are
-#    dropped here, for this script only. Should nvm still not work, the Node 22 it has
-#    installed is found by its path.
-node_major() { node -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/'; }
-if [ "$(node_major)" -lt 22 ] 2>/dev/null || ! command -v node >/dev/null; then
-  unset npm_config_prefix NPM_CONFIG_PREFIX PREFIX
-  if [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then
-    set +u
-    # shellcheck disable=SC1091
-    . "${NVM_DIR:-$HOME/.nvm}/nvm.sh" >/dev/null 2>&1 || true
-    nvm use >/dev/null 2>&1 || nvm install >/dev/null 2>&1 || true
-    set -u
-  fi
-  if [ "$(node_major)" -lt 22 ] 2>/dev/null || ! command -v node >/dev/null; then
-    for dir in "${NVM_DIR:-$HOME/.nvm}"/versions/node/v2[2-9]*/bin "${NVM_DIR:-$HOME/.nvm}"/versions/node/v[3-9][0-9]*/bin; do
-      [ -x "$dir/node" ] && PATH="$dir:$PATH"
-    done
-  fi
-fi
-if [ "$(node_major)" -lt 22 ] 2>/dev/null; then
-  echo "Node 22 or later is required; found $(node -v). Install it with 'nvm install 22'." >&2
-  exit 1
-fi
+# 1. Node 22.12 or later (scripts/use-node.sh: uses nvm and .nvmrc if the shell has an older one).
+# shellcheck disable=SC1091
+. scripts/use-node.sh
 say "node $(node -v), npm $(npm -v)"
 
 # 2. Dependencies, including the Electron binary (missing when npm ci ran under an old Node).
@@ -85,11 +63,12 @@ if [ "$MODE" != dev ] && [ ! -L release ] && in_icloud "$ROOT"; then
   ln -s "$OUT" release
 fi
 
-# 4. The app allows one running copy; a second launch would quit silently. (AnotherNotes
-#    was the app's name until 0.1.0; a copy from then may still be running.)
+# 4. The app allows one running copy; a second launch would quit silently. (It was
+#    AnotherNote before the rename, and AnotherNotes until 0.1.0; a copy from then may still be running.)
 DEV_BIN="$ROOT/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
-if pgrep -x AnotherNote >/dev/null || pgrep -x AnotherNotes >/dev/null || pgrep -f "$DEV_BIN" >/dev/null; then
+if pgrep -x Tutornote >/dev/null || pgrep -x AnotherNote >/dev/null || pgrep -x AnotherNotes >/dev/null || pgrep -f "$DEV_BIN" >/dev/null; then
   say "quitting the running copy"
+  pkill -x Tutornote 2>/dev/null || true
   pkill -x AnotherNote 2>/dev/null || true
   pkill -x AnotherNotes 2>/dev/null || true
   pkill -f "$DEV_BIN" 2>/dev/null || true
@@ -113,7 +92,7 @@ esac
 
 # 7. Build, then run in the foreground: the app prints its own and the web app's console
 #    output here. ELECTRON_ENABLE_LOGGING=1 in the environment adds Chromium's own.
-say "app URL: ${ANOTHERNOTES_URL:-https://anothernote.app/dashboard (default)}"
+say "app URL: ${ANOTHERNOTES_URL:-https://tutornote.ai/dashboard (default)}"
 case "$MODE" in
   dev)
     say "building from source and starting Electron"
@@ -121,18 +100,18 @@ case "$MODE" in
     exec node_modules/.bin/electron .
     ;;
   pack)
-    say "building release/<arch>/AnotherNote.app"
+    say "building release/<arch>/Tutornote.app"
     npm run pack
     ARCH_DIR="mac-$(uname -m | sed 's/x86_64/x64/')"
     [ -d "release/$ARCH_DIR" ] || ARCH_DIR=mac
-    APP="release/$ARCH_DIR/AnotherNote.app"
+    APP="release/$ARCH_DIR/Tutornote.app"
     ;;
   dist)
     say "building the universal .app and .dmg"
     npm run dist:mac
-    APP="release/mac-universal/AnotherNote.app"
+    APP="release/mac-universal/Tutornote.app"
     ls -1 release/*.dmg
     ;;
 esac
 say "starting $APP"
-exec "$APP/Contents/MacOS/AnotherNote"
+exec "$APP/Contents/MacOS/Tutornote"

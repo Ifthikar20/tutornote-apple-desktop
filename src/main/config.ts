@@ -3,10 +3,10 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 /**
- * Where the web app and its API live: anothernote.app, or ANOTHERNOTES_URL for a test
+ * Where the web app and its API live: tutornote.ai, or ANOTHERNOTES_URL for a test
  * server or a local build (http://100.49.56.40/, http://localhost:8080).
  */
-const DEFAULT_SITE = "https://anothernote.app";
+const DEFAULT_SITE = "https://tutornote.ai";
 
 function resolveSite(): URL {
   const override = process.env.ANOTHERNOTES_URL;

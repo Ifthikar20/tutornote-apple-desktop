@@ -26,7 +26,7 @@ import { APP_ORIGIN } from "./config";
   gets no --anothernotes-speech flag, and the web app records for the server as before.
 */
 
-const HELPER = "anothernote-speech";
+const HELPER = "tutornote-speech";
 
 export function speechHelperPath(): string | null {
   if (process.platform !== "darwin") return null;
