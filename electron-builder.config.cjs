@@ -34,8 +34,11 @@ module.exports = {
   // cookie store, the refresh cookie among it, in plain text on disk. Turned off, and the
   // cookies encrypted with a Keychain key, as Chrome does (one-way: cookies written once
   // encrypted cannot be read by a build without it). The app's code is checked against the
-  // signed bundle when it loads, and is only ever app.asar. The app's own file:// pages
-  // (static/) use no fetch or service worker, so they need no extra file:// privileges.
+  // signed bundle when it loads, and is only ever app.asar. The file:// privileges stay: the
+  // app's own screens (static/: the tab bar, the loading screen, sign-in, offline) are file://
+  // pages inside app.asar, and with them off every one but sign-in failed to load
+  // (ERR_FILE_NOT_FOUND) and the offline page retried itself in a loop. Electron's advice is
+  // to turn them off only for an app that serves no file:// pages.
   electronFuses: {
     runAsNode: false,
     enableCookieEncryption: true,
@@ -43,7 +46,7 @@ module.exports = {
     enableNodeCliInspectArguments: false,
     enableEmbeddedAsarIntegrityValidation: true,
     onlyLoadAppFromAsar: true,
-    grantFileProtocolExtraPrivileges: false,
+    grantFileProtocolExtraPrivileges: true,
   },
   // The link that brings a browser sign-in back into the app (src/main/auth.ts).
   protocols: { name: "Tutornote", schemes: ["anothernotes"] },
