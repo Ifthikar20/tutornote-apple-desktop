@@ -113,10 +113,13 @@ interface Page {
   incoming?: () => void;
   /**
    * Reported by the page: the sidebar's right edge (-1: no sidebar), its colour, the
-   * page's own colour at its top (the active tab's), and the backdrop of a dialog that is
-   * open ("" when none), which the tab bar dims itself with.
+   * page's own colour at its top (the active tab's), the backdrop of a dialog that is
+   * open ("" when none), which the tab bar dims itself with, and whether a reader covers
+   * the whole page (Read mode, the PDF's full-page reader).
    */
-  chrome?: { right: number; background: string; surface: string; dark: boolean; scrim: string };
+  chrome?: { right: number; background: string; surface: string; dark: boolean; scrim: string; reading: boolean };
+  /** In the browser's own full screen (a reader's Full screen button, F): the page alone fills the window. */
+  fullScreen?: boolean;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -969,8 +972,16 @@ function pruneForward(page: Page): void {
   if (next < history.length()) history.removeEntryAtIndex(next);
 }
 
-/** The bar is always there: over the notes, and over the sign-in screen as its one tab. */
-const toolbarVisible = (): boolean => Boolean(activePage());
+/**
+ * The bar is there over the notes, and over the sign-in screen as its one tab; it makes way
+ * for a reader (Read mode, the PDF's full-page reader) and for the browser's own full screen.
+ * A reader covers the whole page and has its own top bar where the tab bar would sit, with
+ * Close, the background (paper or night) and full screen: the page then has the window to itself.
+ */
+const toolbarVisible = (): boolean => {
+  const page = activePage();
+  return Boolean(page) && !page?.chrome?.reading && !page?.fullScreen;
+};
 
 /** The sign-in screen's bar: light, like the screen, whatever the web app last had; its tab white like the screen's left half. */
 const SIGN_IN_THEME = { background: "rgb(247, 247, 245)", dark: false, surface: "rgb(255, 255, 255)" };
@@ -1085,7 +1096,7 @@ function installIpc(): void {
   // A page reports where its sidebar ends, what colour it is, and an open dialog (preload).
   ipcMain.on("chrome:layout", (event, report: unknown) => {
     const page = pageOf(event.sender);
-    const r = (report ?? {}) as { right?: unknown; background?: unknown; surface?: unknown; dark?: unknown; scrim?: unknown };
+    const r = (report ?? {}) as { right?: unknown; background?: unknown; surface?: unknown; dark?: unknown; scrim?: unknown; reading?: unknown };
     if (!page || typeof r.right !== "number" || !Number.isFinite(r.right)) return;
     page.chrome = {
       right: Math.max(-1, Math.min(4000, Math.round(r.right))),
@@ -1093,6 +1104,7 @@ function installIpc(): void {
       surface: typeof r.surface === "string" ? r.surface.slice(0, 64) : "",
       dark: r.dark === true,
       scrim: typeof r.scrim === "string" ? r.scrim.slice(0, 64) : "",
+      reading: r.reading === true,
     };
     if (page.incoming && page.chrome.right >= 0) page.incoming();
     if (page.id !== activeId) return;
@@ -1113,7 +1125,9 @@ function installIpc(): void {
     }
     if (!isAppUrl(url)) return;
     if (noteKey(url)) openNote(url);
-    else showHome(url);
+    // The landing page is the website's front door, never a page of the app: its link (the
+    // sign-in and legal pages' logo) goes to the dashboard, as a navigation to "/" does (guard).
+    else showHome(pathOf(url) === "/" ? APP_URL : url);
   });
 }
 
@@ -1144,6 +1158,16 @@ function installMaintenanceWatch(win: BrowserWindow): void {
 function wirePage(win: BrowserWindow, page: Page): void {
   const contents = page.view.webContents;
   watchLessonAudio(contents);
+  // The browser's own full screen (a reader's Full screen button): the window goes full
+  // screen with it (Electron), and the tab bar makes way (toolbarVisible) until it ends.
+  const fullScreen = (on: boolean) => (): void => {
+    page.fullScreen = on;
+    if (page.id !== activeId) return;
+    layout();
+    pushState();
+  };
+  contents.on("enter-html-full-screen", fullScreen(true));
+  contents.on("leave-html-full-screen", fullScreen(false));
   contents.on("audio-state-changed", (event) => {
     page.audible = event.audible;
     applyThrottle(page);

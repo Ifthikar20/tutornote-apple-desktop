@@ -162,7 +162,11 @@ function reportChrome(): void {
       surface = surfaceAt(Math.min(innerWidth - 1, left + 160), right >= 0 ? BAR + 6 : 6, left);
     }
     if (location.protocol === "app:" && sidebarSettled === null) settleSidebar();
-    const state = { right, background, surface, scrim, dark: document.documentElement.classList.contains("dark") };
+    // A reader over the whole page (Read mode, the PDF's full-page reader): the tab bar
+    // makes way for it, its own top bar (Close, the background, full screen) being where the
+    // bar sits. The web app's own test of it: lib/study/pageCover.ts studyPageCovered.
+    const reading = Boolean(document.body?.classList.contains("pdf-reading") || document.querySelector("[data-read-theme]"));
+    const state = { right, background, surface, scrim, reading, dark: document.documentElement.classList.contains("dark") };
     const key = JSON.stringify(state);
     if (key === last) return;
     last = key;

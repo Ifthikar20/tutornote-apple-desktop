@@ -10,7 +10,7 @@ import { serverRequest, type ServerResponse } from "./server";
   The bundled renderer: the web app's production build served from the app's own origin,
   app://anothernotes, the way nginx serves it on the site.
 
-    app://anothernotes/dashboard        -> renderer/index.html  (the SPA; any route)
+    app://anothernotes/dashboard        -> renderer/_html/app.html  (the SPA's empty shell; any route)
     app://anothernotes/assets/x.js      -> renderer/assets/x.js
     app://anothernotes/api/notes        -> <server>/api/notes    (forwarded, with cookies)
     app://anothernotes/img/<sha>.jpg    -> <server>/img/<sha>.jpg
@@ -94,7 +94,17 @@ function fromAnotherSite(request: Request): boolean {
   return request.headers.get("sec-fetch-site") === "cross-site";
 }
 
-/** A file of the bundle, or index.html for a route of the SPA. */
+/*
+  A route of the SPA gets the app's empty shell, as nginx gives it on the site
+  (scripts/site-routes.mjs in the web repo: APP_SHELL). Not index.html: the build writes the
+  landing page into it as real HTML, which the window would paint on every load until the
+  app's code replaced it. A bundle from before that pre-render has no shell; index.html is
+  the app there.
+*/
+const APP_SHELL = path.join(RENDERER_DIR, "_html", "app.html");
+const shellFile = (): string => (existsSync(APP_SHELL) ? APP_SHELL : path.join(RENDERER_DIR, "index.html"));
+
+/** A file of the bundle, or the app's shell for a route of the SPA. */
 async function serve(pathname: string): Promise<Response> {
   let decoded: string;
   try {
@@ -106,7 +116,7 @@ async function serve(pathname: string): Promise<Response> {
   const inside = file === RENDERER_DIR || file.startsWith(`${RENDERER_DIR}${path.sep}`);
   const exists = inside && existsSync(file) && statSync(file).isFile();
   if (!exists && path.extname(decoded)) return new Response("Not found", { status: 404 });
-  const target = exists ? file : path.join(RENDERER_DIR, "index.html");
+  const target = exists ? file : shellFile();
   const response = await net.fetch(pathToFileURL(target).toString());
   if (target.endsWith(".html")) {
     const headers = new Headers(response.headers);
