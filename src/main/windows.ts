@@ -984,11 +984,11 @@ const toolbarVisible = (): boolean => {
 };
 
 /**
- * The sign-in screen's bar: light, like the screen, whatever the web app last had. The
- * landing page's cream tones (static/signin.html): the strip a shade deeper, its tab the
- * screen's own cream, so the tab runs into it.
+ * The sign-in screen's bar: light, like the screen, whatever the web app last had. The screen
+ * is white from edge to edge, as the web app's sign-in page is (static/signin.html): the strip
+ * a light grey, its tab white, so the tab runs into it.
  */
-const SIGN_IN_THEME = { background: "rgb(245, 243, 238)", dark: false, surface: "rgb(255, 249, 240)" };
+const SIGN_IN_THEME = { background: "rgb(247, 247, 245)", dark: false, surface: "rgb(255, 255, 255)" };
 
 /** Where the tab bar starts: the sidebar's edge when the page has one, else the window's. */
 const barStart = (): number => {
