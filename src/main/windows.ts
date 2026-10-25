@@ -1161,6 +1161,7 @@ function wirePage(win: BrowserWindow, page: Page): void {
   // The browser's own full screen (a reader's Full screen button): the window goes full
   // screen with it (Electron), and the tab bar makes way (toolbarVisible) until it ends.
   const fullScreen = (on: boolean) => (): void => {
+    console.log(`[window] ${page.role} page ${on ? "entered" : "left"} full screen`);
     page.fullScreen = on;
     if (page.id !== activeId) return;
     layout();

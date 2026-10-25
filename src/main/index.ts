@@ -101,14 +101,17 @@ if (!app.requestSingleInstanceLock()) {
 
     // The web app may use the microphone (dictation, talking to the tutor) and the
     // clipboard; nothing else, and nothing at all from any other origin.
-    session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
       let origin = "";
       try {
         origin = originOf(details.requestingUrl);
       } catch {
         /* no origin: refused below */
       }
-      if (origin !== APP_ORIGIN) return callback(false);
+      if (origin !== APP_ORIGIN) {
+        console.log(`[permissions] request refused: ${permission} (${origin || details.requestingUrl || "no url"}, page ${contents?.getURL?.() ?? "?"})`);
+        return callback(false);
+      }
       if (permission === "media") {
         const types = "mediaTypes" in details ? (details.mediaTypes ?? []) : [];
         if (types.includes("video")) return callback(false);
@@ -131,9 +134,13 @@ if (!app.requestSingleInstanceLock()) {
       } catch {
         /* no origin: refused below */
       }
-      if (origin !== APP_ORIGIN) return false;
-      if (permission === "media") return details.mediaType !== "video";
-      return permission === "clipboard-sanitized-write" || permission === "fullscreen" || permission === "notifications";
+      const allowed =
+        origin === APP_ORIGIN &&
+        (permission === "media"
+          ? details.mediaType !== "video"
+          : permission === "clipboard-sanitized-write" || permission === "fullscreen" || permission === "notifications");
+      if (!allowed) console.log(`[permissions] check refused: ${permission} (${origin || requestingOrigin || "no origin"})`);
+      return allowed;
     });
     session.defaultSession.setDevicePermissionHandler(() => false);
     session.defaultSession.on("select-hid-device", (event, _details, callback) => {
