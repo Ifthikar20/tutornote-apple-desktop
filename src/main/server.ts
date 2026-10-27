@@ -1,4 +1,5 @@
 import { net, session } from "electron";
+import { TIMED } from "./apiTiming";
 
 /*
   Requests from the app to the Tutornote server, with the app's own cookie handling.
@@ -26,6 +27,24 @@ export interface ServerResponse {
 /** Headers the request's own connection supplies, or that this module sets itself. */
 const SKIPPED_REQUEST_HEADERS = /^(host|origin|referer|connection|content-length|accept-encoding|cookie|keep-alive|transfer-encoding|upgrade|te|trailer|expect|proxy-.*|sec-.*)$/i;
 
+/*
+  How soon Chromium's network stack takes a request (net.request's default is "idle"): the
+  tutor's answers and voice (guide ask, script, tts, explain: the paths apiTiming.ts times) go
+  first, pictures and files after everything else, the rest as before.
+*/
+const LOW_PRIORITY = /^\/(img|files)(\/|$)/;
+
+function priorityOf(url: string): "highest" | "low" | undefined {
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return undefined;
+  }
+  if (TIMED.test(pathname)) return "highest";
+  return LOW_PRIORITY.test(pathname) ? "low" : undefined;
+}
+
 export async function serverRequest(
   url: string,
   init: { method?: string; headers?: Record<string, string>; body?: Uint8Array | string },
@@ -33,7 +52,15 @@ export async function serverRequest(
   const method = (init.method ?? "GET").toUpperCase();
   const cookie = await cookieHeaderFor(url);
   return new Promise<ServerResponse>((resolve, reject) => {
-    const request = net.request({ method, url, session: session.defaultSession, useSessionCookies: false, redirect: "manual" });
+    const priority = priorityOf(url);
+    const request = net.request({
+      method,
+      url,
+      session: session.defaultSession,
+      useSessionCookies: false,
+      redirect: "manual",
+      ...(priority ? { priority } : {}),
+    });
     for (const [name, value] of Object.entries(init.headers ?? {})) {
       if (SKIPPED_REQUEST_HEADERS.test(name)) continue;
       try {
@@ -52,13 +79,18 @@ export async function serverRequest(
     };
 
     // A redirect is the server's answer as it stands (the page decides where to go), so
-    // it is returned, not followed; its cookies count (the desktop exchange sets one).
+    // it is returned, not followed; its cookies count (the desktop exchange sets one). The
+    // request is stopped inside the event itself: Electron fails a manual redirect that is
+    // neither followed nor aborted by the time its handler returns ("Redirect was
+    // cancelled"), and saving the cookies takes longer than that.
+    let redirected = false;
     request.on("redirect", (status, _method, location, headers) => {
+      redirected = true;
+      request.abort();
       void storeCookies(url, headers["set-cookie"]).finally(() => {
         const out = plainHeaders(headers);
         out.location = location;
         settle({ status, statusText: "", headers: out, body: null });
-        request.abort();
       });
     });
     request.on("response", (response) => {
@@ -109,6 +141,8 @@ export async function serverRequest(
       );
     });
     request.on("error", (error) => {
+      // (a redirect is the answer, already on its way: the abort that ended it is no failure)
+      if (redirected) return;
       if (!settled) {
         settled = true;
         reject(error);

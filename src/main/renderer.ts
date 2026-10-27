@@ -2,6 +2,7 @@ import { net, protocol } from "electron";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { clock, TIMED, timeBody } from "./apiTiming";
 import { API_ORIGIN, APP_ORIGIN, APP_SCHEME, CLIENT_HEADER, PROXIED_PATHS, RENDERER_DIR, SITE_ORIGIN } from "./config";
 import { appEvents } from "./events";
 import { serverRequest, type ServerResponse } from "./server";
@@ -13,7 +14,8 @@ import { serverRequest, type ServerResponse } from "./server";
     app://anothernotes/dashboard        -> renderer/_html/app.html  (the SPA's empty shell; any route)
     app://anothernotes/assets/x.js      -> renderer/assets/x.js
     app://anothernotes/api/notes        -> <server>/api/notes    (forwarded, with cookies)
-    app://anothernotes/img/<sha>.jpg    -> <server>/img/<sha>.jpg
+    app://anothernotes/img/<sha>.jpg    -> <server>/img/<sha>.jpg (its redirect to the site's
+                                           picture store followed here: followPicture)
 
   To the web app nothing changed: its API base is the relative /api, as in production,
   so its fetches are same-origin. The forwarding runs in this process (server.ts), which
@@ -129,6 +131,8 @@ async function serve(pathname: string): Promise<Response> {
 
 /** The server's answer to an API request, with the app's cookies, addresses rewritten to the app's origin. */
 async function forward(request: Request, url: URL): Promise<Response> {
+  // (the [api] line's time, and a timed answer's first byte, first words and end, count from here)
+  const t0 = performance.now();
   const headers: Record<string, string> = {};
   request.headers.forEach((value, name) => {
     headers[name] = value;
@@ -151,7 +155,14 @@ async function forward(request: Request, url: URL): Promise<Response> {
     // writer's retry on reconnect. protocol.handle turns Response.error() into net::ERR_FAILED.
     return Response.error();
   }
-  console.log(`[api] ${request.method} ${url.pathname} -> ${response.status}`);
+  const picture = await followPicture(request.method, url.pathname, response);
+  if (picture) return picture;
+  console.log(`[api] ${clock()} ${request.method} ${url.pathname} -> ${response.status} ${Math.round(performance.now() - t0)} ms`);
+  // The tutor's streamed answers (apiTiming.ts): a second line as the body ends, the chunks passed
+  // on as they come.
+  if (TIMED.test(url.pathname) && hasBodyStatus(response.status)) {
+    response = { ...response, body: timeBody(response.body, `${request.method} ${url.pathname}`, t0) };
+  }
   if (response.status < 400 && changesLists(request.method, url.pathname, body)) appEvents.emit("lists-changed");
   if (response.status === 200 && request.method === "GET" && UPLOAD_STATUS.test(url.pathname)) {
     response = { ...response, body: await watchUpload(response.body) };
@@ -177,6 +188,49 @@ async function forward(request: Request, url: URL): Promise<Response> {
     statusText: response.statusText,
     headers: out,
   });
+}
+
+/*
+  A checked picture (a board's, a looked up answer's) is /img/<sha256>.jpg on the server, which may
+  answer with a redirect to the same path on the site's picture store. The page loads its pictures
+  from the app's own origin (img-src 'self'), so it could never follow that redirect elsewhere: it
+  is followed here, without cookies and no further, and the picture is the answer to the page's
+  own request, as if the server had sent it. Anything else (another path, another kind of answer,
+  a store that fails or sends something other than a picture) goes back to the page as it came.
+  A picture only: a raster type (an SVG can carry script, and this answer is the app's own origin,
+  where a document would run with the preload's bridge), marked so it is never taken for another.
+*/
+const PICTURE_PATH = /^\/img\/[0-9a-fA-F]{64}\.jpg$/;
+const PICTURE_TYPE = /^image\/(jpeg|png|webp|gif|avif)\b/i;
+const MOVED = new Set([301, 302, 307, 308]);
+
+async function followPicture(method: string, pathname: string, response: ServerResponse): Promise<Response | null> {
+  if (method !== "GET" || !PICTURE_PATH.test(pathname) || !MOVED.has(response.status)) return null;
+  let target: URL;
+  try {
+    target = new URL(response.headers.location ?? "");
+  } catch {
+    return null;
+  }
+  if (target.protocol !== "https:" || target.pathname !== pathname) return null;
+  const head = `[api] GET ${pathname} -> ${response.status} followed`;
+  try {
+    const fetched = await net.fetch(target.href, { credentials: "omit", redirect: "error" });
+    const type = fetched.headers.get("content-type") ?? "";
+    if (fetched.status !== 200 || !PICTURE_TYPE.test(type)) {
+      console.warn(`${head} -> ${fetched.status} ${type || "no type"}: not a picture`);
+      void fetched.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    const headers = new Headers({ "content-type": type, "x-content-type-options": "nosniff" });
+    const cache = fetched.headers.get("cache-control");
+    if (cache) headers.set("cache-control", cache);
+    console.log(`${head} -> 200`);
+    return new Response(fetched.body, { status: 200, headers });
+  } catch (e) {
+    console.warn(`${head}: ${(e as Error).message}`);
+    return null;
+  }
 }
 
 /*

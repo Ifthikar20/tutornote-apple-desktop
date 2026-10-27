@@ -5,14 +5,17 @@ import {
   dialog,
   ipcMain,
   Menu,
+  screen,
   WebContentsView,
   type ContextMenuParams,
   type MenuItemConstructorOptions,
   type WebContents,
 } from "electron";
 import path from "node:path";
+import { adjacentTab, boardBarInset, BOARD_TAB_ID, tabOrder, type MainLook } from "./boardHost";
 import { API_ORIGIN, APP_ORIGIN, APP_URL, originOf, SITE_ORIGIN, WEBSITE_URL } from "./config";
 import { appEvents } from "./events";
+import { LAUNCH_START, launchStep, SPLASH_DELAY_MS, SPLASH_MAX_MS, type LaunchEvent, type LaunchState } from "./launchReveal";
 import { openExternal } from "./links";
 import { watchLessonAudio } from "./media";
 import { nativeSpeechAvailable } from "./speech";
@@ -64,6 +67,12 @@ import { loadWindowState, saveWindowState } from "./store";
   sign-in screen shows there are no tabs and no tab bar. Pages out of sight load again
   in the background when the server confirms a change to the lists they show
   (events.ts), so the sidebar and the dashboard are current when they come back.
+
+  The board of a lesson over another app (screenTeach.ts) can have a tab here too, the second,
+  right after Home (id BOARD_TAB_ID). Its page is screenTeach's, not one of these: this module
+  only holds the tab's slot (dockBoardView puts the view under the bar, undockBoardView gives it
+  back) and tells screenTeach through appEvents what the student did with the tab. While the
+  board is in its own window, the tab stays in the bar as an "away" tab that brings it back.
 */
 
 /** The tab bar's height; the preload makes the same room in the web app's layout. */
@@ -129,6 +138,21 @@ let activeId = 0;
 let nextPageId = 1;
 /** The bar's colours: the sidebar's (the strip) and the page's (the active tab). */
 let theme: { background: string; dark: boolean; surface: string } | null = null;
+/** The desktop companion (companion.ts), as its tab bar button shows it: its blob hidden, shown,
+ *  or the tutor on (told through appEvents "companion-state"). */
+let companionLook: "hidden" | "shown" | "on" = "hidden";
+appEvents.on("companion-state", (look: unknown) => {
+  if ((look !== "hidden" && look !== "shown" && look !== "on") || look === companionLook) return;
+  companionLook = look;
+  pushState();
+});
+/** The Board tab (screenTeach.ts): its title, the board's colour (the tab's fill while it is
+ *  active), the "something new" dot, whether the board is in its own window (away), and its view
+ *  while the board is here. Null while the lesson has no board in the bar. */
+let boardTab: { title: string; surface: string; dot: boolean; away: boolean; view: WebContentsView | null } | null = null;
+/** The page shown before the Board tab was selected: the one shown again when it goes. */
+let lastPageId = 0;
+const boardActive = (): boolean => Boolean(boardTab?.view) && activeId === BOARD_TAB_ID;
 let titleTimer: NodeJS.Timeout | undefined;
 let spareTimer: NodeJS.Timeout | undefined;
 let refreshTimer: NodeJS.Timeout | undefined;
@@ -162,23 +186,20 @@ const GOOGLE_SIGNIN_HOSTS = new Set(["accounts.google.com"]);
  */
 const ROUND_TRIP_PREFIXES = ["/api/auth/", "/api/sources/"];
 
-/**
- * The loading screen (static/loading.html) is an intro: its little computer types a note,
- * turns it into a smiley, writes "Welcome to Tutornote" and plays its pictures. The page
- * says when that is over by setting its title to SPLASH_READY_TITLE (static/loading.js),
- * so its timing lives in the page, counted from its own first paint; the app opens then,
- * or when its first page has loaded if that is later. The intro gets at most
- * SPLASH_INTRO_MAX_MS (however many pictures there are), the first page SPLASH_MAX_MS
- * (no hang). It plays once per run, at launch: a window reopened later (the Dock, a link,
- * a menu item) opens as soon as its page has loaded.
- */
-const SPLASH_READY_TITLE = "tutornote:ready";
-const SPLASH_INTRO_MAX_MS = 10000;
-const SPLASH_MAX_MS = 15000;
-let splashShown = false;
+/*
+  The loader (static/loading.html) is only for a slow start: the main window shows the moment
+  its first page (the web app, the sign-in screen or the offline page) has loaded, and only if
+  that takes longer than SPLASH_DELAY_MS does a small loader come up, closed the moment the
+  window shows, however it was shown (the reveal, the Dock, a link, a lesson). No intro and no
+  minimum: a start that loads within a second shows no loader at all. SPLASH_MAX_MS: the window
+  shows by then whatever its page is doing. launchReveal.ts holds the rule, step by step.
+*/
+/** The main window's launch reveal while it is pending (showMainWindow), else null. */
+let revealMain: (() => void) | null = null;
 
-/** A small frameless window with the loading animation, shown while the first page loads. */
-function createSplash(): BrowserWindow {
+/** A small frameless window with the loader, made hidden; `ready` once it has drawn (the launch
+ *  reveal decides then whether it still shows). */
+function createSplash(ready: () => void): BrowserWindow {
   const splash = new BrowserWindow({
     width: 420,
     height: 440,
@@ -190,11 +211,10 @@ function createSplash(): BrowserWindow {
     show: false,
     title: "Opening Tutornote…",
     backgroundColor: "#ffffff",
-    // The intro's timers must run on time even while the window is coming up behind others.
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   splash.once("ready-to-show", () => {
-    if (!splash.isDestroyed()) splash.show();
+    if (!splash.isDestroyed()) ready();
   });
   void splash.loadFile(path.join(app.getAppPath(), "static", "loading.html"));
   return splash;
@@ -350,6 +370,18 @@ export function getMainWindow(): BrowserWindow | null {
   return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
 }
 
+/** Show the main window now (the Dock), creating it if it was closed. While its launch reveal is
+ *  pending it goes through that, so the loader goes with it and nothing later shows one. */
+export function showMainWindow(): void {
+  const win = getMainWindow();
+  if (!win) {
+    createMainWindow();
+    return;
+  }
+  revealMain?.();
+  if (!win.isVisible()) win.show();
+}
+
 /** Bring the main window to the front, creating it if it was closed (macOS keeps the app running). */
 export function focusMainWindow(): BrowserWindow {
   const win = getMainWindow() ?? createMainWindow();
@@ -437,19 +469,24 @@ export function newTab(): void {
  * Close the active note's tab. The home page's tab never closes: on it, the window closes
  * when it is the only tab (as it did when the home page was not a tab), and otherwise
  * nothing happens, so the notes open beside it are never lost to a ⌘W meant for a tab.
+ * On the Board tab, the board closes (screenTeach.ts); nor does the window close while it is open.
  */
 export function closeActiveTab(): void {
+  if (boardActive()) return void appEvents.emit("board-tab-close");
   const page = activePage();
   if (page?.role === "note") closeTab(page.id);
-  else if (noteTabs().length === 0) getMainWindow()?.close();
+  else if (noteTabs().length === 0 && !boardTab) getMainWindow()?.close();
 }
 
-/** The next (1) or previous (-1) tab, the home page first, wrapping around. */
+/** The next (1) or previous (-1) tab, the home page first, then the Board, wrapping around. The
+ *  Board tab while the board is in its own window brings it here (Open in Tutornote). */
 export function selectAdjacentTab(step: number): void {
-  const order = [homePage(), ...noteTabs()].filter((p): p is Page => Boolean(p));
-  if (order.length < 2) return;
-  const i = order.findIndex((p) => p.id === activeId);
-  selectPage(order[(i + step + order.length) % order.length].id);
+  const order = tabOrder(homePage()?.id ?? null, Boolean(boardTab), noteTabs().map((p) => p.id));
+  const next = adjacentTab(order, activeId, step);
+  if (next === null) return;
+  if (next !== BOARD_TAB_ID) selectPage(next);
+  else if (boardTab?.view) selectBoardTab({ focus: true });
+  else appEvents.emit("board-tab-open");
 }
 
 export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
@@ -475,7 +512,9 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   activeId = 0;
   theme = null;
   closingWindow = false;
-  if (state.maximized) win.maximize();
+  boardTab = null;
+  lastPageId = 0;
+  // (maximized as it shows, not now: maximize() shows a window at once, before its page has loaded)
 
   // The tab bar is a view of its own, kept above the pages; it never goes anywhere else.
   const bar = new WebContentsView({
@@ -497,52 +536,47 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   const onListsChanged = (): void => markListsChanged();
   appEvents.on("lists-changed", onListsChanged);
 
-  // The loading screen (at launch only), until its intro is over and the first page (the
-  // web app, the sign-in screen or the offline page) has finished loading.
-  const splash = splashShown ? null : createSplash();
-  splashShown = true;
-  let revealed = false;
-  let pageLoaded = false;
-  let introOver = !splash;
-  const reveal = (): void => {
-    if (revealed) return;
-    revealed = true;
-    clearTimeout(fallback);
-    clearTimeout(introCap);
-    if (!win.isDestroyed()) {
-      win.show();
-      win.focus();
-      activeContents()?.focus();
+  // The window shows the moment its first page (the web app, the sign-in screen or the offline
+  // page) has finished loading; a loader only if that takes longer than SPLASH_DELAY_MS, gone the
+  // moment the window shows, however it is shown (launchReveal.ts, step by step).
+  let launch: LaunchState = LAUNCH_START;
+  let splash: BrowserWindow | null = null;
+  const launchEvent = (event: LaunchEvent): void => {
+    const step = launchStep(launch, event);
+    // (kept before acting: showing the window raises "show", a step of its own, which finds it done)
+    launch = step.state;
+    if (launch.revealed && revealMain === askReveal) revealMain = null;
+    for (const action of step.actions) {
+      if (action === "make-splash") {
+        splash = createSplash(() => launchEvent("splash-ready"));
+      } else if (action === "show-splash") {
+        if (splash && !splash.isDestroyed()) splash.show();
+      } else if (action === "close-splash") {
+        clearTimeout(splashTimer);
+        if (splash && !splash.isDestroyed()) splash.close();
+        splash = null;
+      } else if (action === "show-window") {
+        clearTimeout(fallback);
+        clearTimeout(splashTimer);
+        if (!win.isDestroyed()) {
+          if (state.maximized && !win.isMaximized()) win.maximize();
+          win.show();
+          win.focus();
+          focusActive();
+        }
+      }
     }
-    if (splash && !splash.isDestroyed()) splash.close();
   };
-  const maybeReveal = (): void => {
-    if (pageLoaded && introOver) reveal();
-  };
-  const endIntro = (): void => {
-    if (introOver) return;
-    introOver = true;
-    clearTimeout(introCap);
-    maybeReveal();
-  };
-  if (splash) {
-    splash.on("page-title-updated", (event, title) => {
-      if (title !== SPLASH_READY_TITLE) return;
-      event.preventDefault(); // the window keeps its own name
-      endIntro();
-    });
-    splash.webContents.once("did-fail-load", endIntro);
-    splash.once("closed", endIntro);
-  }
-  const introCap = splash ? setTimeout(endIntro, SPLASH_INTRO_MAX_MS) : undefined;
-  const fallback = setTimeout(reveal, SPLASH_MAX_MS);
+  const askReveal = (): void => launchEvent("asked");
+  revealMain = askReveal;
+  const splashTimer = setTimeout(() => launchEvent(!win.isDestroyed() && win.isVisible() ? "shown" : "delay"), SPLASH_DELAY_MS);
+  const fallback = setTimeout(() => launchEvent("max"), SPLASH_MAX_MS);
+  // Shown any other way first (the Dock, a link, a lesson): the loader goes, and none comes.
+  win.on("show", () => launchEvent("shown"));
 
   const home = newPage("home", first === "signin" ? null : APP_URL);
   selectPage(home.id);
-  home.view.webContents.once("did-finish-load", () => {
-    pageLoaded = true;
-    maybeReveal();
-  });
+  home.view.webContents.once("did-finish-load", () => launchEvent("loaded"));
   if (first === "signin") showSignIn(win);
   else scheduleSpare(2500);
 
@@ -567,7 +601,19 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   win.on("unmaximize", scheduleSave);
   win.on("enter-full-screen", pushState);
   win.on("leave-full-screen", pushState);
+  // The board in a tab can't be seen in a window minimized, hidden (Explain on Screen hides it
+  // while the student picks) or closing: screenTeach.ts moves it to its own window. Not for ⌘Q.
+  const leaving = (): void => {
+    if (boardTab?.view && !quitting) appEvents.emit("board-host-leaving");
+  };
+  win.on("minimize", leaving);
+  win.on("hide", leaving);
+  // (whether the window now lies over what the lesson reads)
+  const bounds = (): void => void appEvents.emit("main-window-bounds");
+  win.on("moved", bounds);
+  win.on("resized", bounds);
   win.on("close", (event) => {
+    leaving();
     clearTimeout(saveTimer);
     saveWindowState(win);
     if (closingWindow) return;
@@ -588,13 +634,17 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   });
   win.on("closed", () => {
     clearTimeout(fallback);
-    clearTimeout(introCap);
+    clearTimeout(splashTimer);
     clearInterval(titleTimer);
     clearTimeout(spareTimer);
     clearTimeout(refreshTimer);
     appEvents.off("lists-changed", onListsChanged);
     if (splash && !splash.isDestroyed()) splash.close();
+    if (revealMain === askReveal) revealMain = null;
     if (mainWindow === win) {
+      if (boardTab?.view) appEvents.emit("board-host-leaving");
+      boardTab = null;
+      lastPageId = 0;
       mainWindow = null;
       toolbar = null;
       pages = [];
@@ -602,6 +652,8 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
       closingWindow = false;
     }
   });
+  // (a board that floats while its lesson goes on keeps its away tab in the new window: screenTeach.ts)
+  appEvents.emit("main-window-created");
   return win;
 }
 
@@ -889,22 +941,170 @@ function reloadPage(page: Page): void {
   void page.view.webContents.loadURL(page.role === "home" ? page.lastUrl || APP_URL : APP_URL);
 }
 
-function selectPage(id: number): void {
+/** `opts.focus` false: the page shows without taking the keys (the board leaving its tab while
+ *  the student is elsewhere). */
+function selectPage(id: number, opts?: { focus?: boolean }): void {
   const target = pages.find((p) => p.id === id && shown(p));
   if (!target) return;
   const previous = activePage();
+  const fromBoard = activeId === BOARD_TAB_ID;
   activeId = id;
   // Speed first, then sight: a page may only rest (and be told it is out of sight, so
   // the web app saves progress and pauses its activity count) if it is allowed to as it
   // goes out of sight.
   for (const page of pages) applyThrottle(page);
   for (const page of pages) page.view.setVisible(page.id === id);
+  boardTab?.view?.setVisible(false);
   adoptTheme();
   layout();
-  target.view.webContents.focus();
+  if (opts?.focus !== false) target.view.webContents.focus();
   void refreshTitle(target);
   pushState();
   if (previous && previous !== target && previous.stale) scheduleRefresh();
+  // (the student left the Board tab for this page: screenTeach.ts judges where they are now)
+  if (fromBoard) appEvents.emit("board-tab-selection", { active: false, undocked: false });
+}
+
+/** The page shown before the Board tab, if it is still shown; else Home, else the first note. */
+const lastShownPage = (): Page | undefined =>
+  pages.find((p) => p.id === lastPageId && shown(p)) ?? homePage() ?? noteTabs()[0];
+
+/*
+  The Board tab (screenTeach.ts owns the board; this module only its slot in the window). None of
+  these focuses anything unless asked: the board comes and goes while the student is in another
+  app, and WebContents.focus() would bring Tutornote to the front.
+*/
+
+/** The Board tab in the bar, or its title, colour and place changed. It is never selected from
+ *  here, and never while the sign-in screen shows. */
+export function showBoardTab(info: { title: string; surface: string; away: boolean }): void {
+  if (homePage()?.signIn) return;
+  if (boardTab && boardTab.title === info.title && boardTab.surface === info.surface && boardTab.away === info.away) return;
+  if (!boardTab) boardTab = { title: info.title, surface: info.surface, dot: false, away: info.away, view: null };
+  else Object.assign(boardTab, { title: info.title, surface: info.surface, away: info.away });
+  if (boardActive()) adoptTheme();
+  pushState();
+}
+
+/** The Board tab goes (the lesson ended, the board closed): the board's view first, if it is here. */
+export function hideBoardTab(): void {
+  undockBoardView();
+  if (!boardTab) return;
+  boardTab = null;
+  layout();
+  pushState();
+}
+
+/** Put the board's view in the window, under the bar and out of sight until its tab is selected.
+ *  False when there is no window to hold it, or it is signing in or closing. */
+export function dockBoardView(view: WebContentsView): boolean {
+  const win = getMainWindow();
+  if (!win || homePage()?.signIn || closingWindow) return false;
+  if (boardTab?.view && boardTab.view !== view) undockBoardView();
+  if (!boardTab) boardTab = { title: "Board", surface: "", dot: false, away: false, view: null };
+  view.setVisible(false);
+  win.contentView.addChildView(view);
+  if (toolbar) win.contentView.addChildView(toolbar); // back on top
+  boardTab.view = view;
+  boardTab.away = false;
+  layout();
+  pushState();
+  return true;
+}
+
+/** Take the board's view out of the window (screenTeach.ts moves it to its own window). The page
+ *  shown before comes back if the Board tab was showing, with the keys only if the window has them. */
+export function undockBoardView(): void {
+  const view = boardTab?.view;
+  if (!boardTab || !view) return;
+  const wasActive = boardActive();
+  const win = getMainWindow();
+  if (win) win.contentView.removeChildView(view);
+  boardTab.view = null;
+  if (wasActive) {
+    activeId = 0;
+    // (a window already gone shows nothing again)
+    const next = win ? lastShownPage() : undefined;
+    if (next) selectPage(next.id, { focus: Boolean(win?.isFocused()) });
+    appEvents.emit("board-tab-selection", { active: false, undocked: true });
+  }
+  layout();
+  pushState();
+}
+
+/** Show the Board tab, as selectPage shows a page. `focus`: the board takes the keys (only for the
+ *  student's own click or key: WebContents.focus() brings the app to the front). */
+export function selectBoardTab({ focus }: { focus: boolean }): void {
+  const view = boardTab?.view;
+  if (!boardTab || !view) return;
+  const previous = activePage();
+  if (activeId !== BOARD_TAB_ID && activeId > 0) lastPageId = activeId;
+  activeId = BOARD_TAB_ID;
+  boardTab.dot = false;
+  // Speed first, then sight (selectPage).
+  for (const page of pages) applyThrottle(page);
+  for (const page of pages) page.view.setVisible(false);
+  view.setVisible(true);
+  adoptTheme();
+  layout();
+  if (focus && !view.webContents.isDestroyed()) view.webContents.focus();
+  pushState();
+  appEvents.emit("board-tab-selection", { active: true, undocked: false });
+  if (previous?.stale) scheduleRefresh();
+}
+
+/** The Board tab is the one showing (the board is here). */
+export const boardTabActive = (): boolean => boardActive();
+
+/** The board is in the window (its tab selected or not). */
+export const boardTabDocked = (): boolean => Boolean(boardTab?.view);
+
+/** The Board tab's title, colour or dot (the dot only while another tab shows). */
+export function setBoardTabInfo(patch: { title?: string; surface?: string; dot?: boolean }): void {
+  if (!boardTab) return;
+  if (patch.title !== undefined) boardTab.title = patch.title;
+  if (patch.surface !== undefined) boardTab.surface = patch.surface;
+  if (patch.dot !== undefined && !(patch.dot && boardActive())) boardTab.dot = patch.dot;
+  if (boardActive()) adoptTheme();
+  pushState();
+}
+
+/** What screenTeach.ts needs to know of the main window to place the board (boardHost.ts). */
+export function mainWindowLook(): MainLook {
+  const win = getMainWindow();
+  if (!win) {
+    return { open: false, shown: false, minimized: false, closing: false, signIn: false, fullScreen: false, focused: false, bounds: null, displayId: null };
+  }
+  const bounds = win.getBounds();
+  return {
+    open: true,
+    shown: win.isVisible(),
+    minimized: win.isMinimized(),
+    closing: closingWindow,
+    signIn: Boolean(homePage()?.signIn),
+    fullScreen: win.isFullScreen(),
+    focused: win.isFocused(),
+    bounds,
+    displayId: screen.getDisplayMatching(bounds).id,
+  };
+}
+
+/** The main window in front with the keys, made or restored if need be: only for the student's own
+ *  Open in Tutornote. */
+export function bringMainForward(): BrowserWindow {
+  const win = getMainWindow() ?? createMainWindow();
+  if (win.isMinimized()) win.restore();
+  // (through its launch reveal while that is pending, as the Dock's showMainWindow)
+  revealMain?.();
+  if (!win.isVisible()) win.show();
+  win.focus();
+  return win;
+}
+
+/** The keys to what shows: the board on its tab, else the page. */
+function focusActive(): void {
+  const contents = boardActive() ? boardTab?.view?.webContents : activeContents();
+  if (contents && !contents.isDestroyed()) contents.focus();
 }
 
 /**
@@ -979,9 +1179,10 @@ function pruneForward(page: Page): void {
  * Close, the background (paper or night) and full screen: the page then has the window to itself.
  */
 const toolbarVisible = (): boolean => {
-  const page = activePage();
-  return Boolean(page) && !page?.chrome?.reading && !page?.fullScreen;
+  if (boardActive()) return true;
+  return pageBarVisible(activePage());
 };
+const pageBarVisible = (page: Page | undefined): boolean => Boolean(page) && !page?.chrome?.reading && !page?.fullScreen;
 
 /**
  * The sign-in screen's bar: light, like the screen, whatever the web app last had. The screen
@@ -991,27 +1192,38 @@ const toolbarVisible = (): boolean => {
 const SIGN_IN_THEME = { background: "rgb(247, 247, 245)", dark: false, surface: "rgb(255, 255, 255)" };
 
 /** Where the tab bar starts: the sidebar's edge when the page has one, else the window's. */
-const barStart = (): number => {
-  const right = activePage()?.chrome?.right ?? -1;
+const barStart = (page: Page | undefined = activePage()): number => {
+  const right = page?.chrome?.right ?? -1;
   return right >= 0 ? right : 0;
 };
-const overSidebarLayout = (): boolean => (activePage()?.chrome?.right ?? -1) >= 0;
+const overSidebarLayout = (page: Page | undefined = activePage()): boolean => (page?.chrome?.right ?? -1) >= 0;
+/** The bar's left edge over `page`, in a window `width` wide. */
+const barXOf = (page: Page | undefined, width: number): number => Math.min(barStart(page), Math.max(0, width - 200));
 
 function layout(): void {
   const win = getMainWindow();
   if (!win) return;
   const [width, height] = win.getContentSize();
   const visible = toolbarVisible();
+  // On the Board tab the pages out of sight keep the layout of the page shown last, so none of
+  // them reflows while the board shows.
+  const ref = activePage() ?? (boardActive() ? lastShownPage() : undefined);
   // With the sidebar the page runs the full height and makes room itself (the preload);
   // without it the page starts below the bar.
-  const top = visible && !overSidebarLayout() ? TOOLBAR_HEIGHT : 0;
+  const top = pageBarVisible(ref) && !overSidebarLayout(ref) ? TOOLBAR_HEIGHT : 0;
   for (const page of pages) page.view.setBounds({ x: 0, y: top, width, height: Math.max(0, height - top) });
+  // The board, always under the bar.
+  boardTab?.view?.setBounds({ x: 0, y: TOOLBAR_HEIGHT, width, height: Math.max(0, height - TOOLBAR_HEIGHT) });
   if (toolbar) {
     toolbar.setVisible(visible);
-    const x = Math.min(barStart(), Math.max(0, width - 200));
+    // (on the Board tab the bar spans the window: its inset keeps every tab where it was)
+    const x = boardActive() ? 0 : barXOf(activePage(), width);
     toolbar.setBounds({ x, y: 0, width: Math.max(0, width - x), height: TOOLBAR_HEIGHT });
   }
 }
+
+/** A tab as the bar draws it; the Board tab's has its dot and whether the board is away. */
+type TabEntry = { id: number; title: string; active: boolean; home: boolean; board?: true; dot?: boolean; away?: boolean };
 
 /** What the tab bar draws: the tabs, whether back goes anywhere, its colours. */
 function pushState(): void {
@@ -1020,20 +1232,32 @@ function pushState(): void {
   const signIn = Boolean(activePage()?.signIn);
   const lights = process.platform === "darwin" && !win.isFullScreen() ? LIGHTS_WIDTH : 0;
   const home = homePage();
-  const tabs = home && !home.signIn ? [home, ...noteTabs()] : noteTabs();
+  const entry = (t: Page): TabEntry => ({ id: t.id, title: t.title, active: t.id === activeId, home: t.role === "home" });
+  const tabs = home && !home.signIn ? [entry(home)] : [];
+  // The Board tab right after Home (never while signing in).
+  if (boardTab && !home?.signIn) {
+    const { title, dot, away } = boardTab;
+    tabs.push({ id: BOARD_TAB_ID, title, active: boardActive(), home: false, board: true, dot, away });
+  }
+  tabs.push(...noteTabs().map(entry));
+  const ref = boardActive() ? lastShownPage() : undefined;
   toolbar.webContents.send("tabs:state", {
-    /** The home page's tab first, then the notes'. */
-    tabs: tabs.map((t) => ({ id: t.id, title: t.title, active: t.id === activeId, home: t.role === "home" })),
+    /** The home page's tab first, then the Board's, then the notes'. */
+    tabs,
     /** The sign-in screen is showing: the bar holds its one tab and nothing else. */
     signIn,
     canGoBack: !signIn && Boolean(activeContents()?.navigationHistory.canGoBack()),
     visible: toolbarVisible(),
-    /** Room to leave at the bar's left for the window buttons, where it overlaps them. */
-    inset: Math.max(8, lights - barStart()),
+    /** Room to leave at the bar's left for the window buttons, where it overlaps them. On the
+     *  Board tab the bar starts at the window's edge, and leaves room up to where it started on the
+     *  page shown before, so no tab moves. */
+    inset: boardActive() ? boardBarInset(barXOf(ref, win.getContentSize()[0]), lights) : Math.max(8, lights - barStart()),
     overSidebar: overSidebarLayout(),
     /** A dialog is open in the page: the bar takes its backdrop and stops taking clicks. */
     scrim: activePage()?.chrome?.scrim ?? "",
     theme,
+    /** The "Tutor on screen" button: filled while the tutor is on. */
+    companion: companionLook,
   });
 }
 
@@ -1059,6 +1283,17 @@ async function refreshTitle(page: Page): Promise<void> {
 
 /** The active page's sidebar colour becomes the bar's, and its page colour the active tab's. */
 function adoptTheme(): void {
+  // On the Board tab the strip keeps the colour of the page shown before, as that page reports it
+  // now (a change of look while the board shows reaches it too), and the tab takes the board's.
+  if (boardActive() && boardTab) {
+    const before = lastShownPage()?.chrome;
+    const strip =
+      before?.background && !/rgba\(0, 0, 0, 0\)|transparent/.test(before.background)
+        ? { background: before.background, dark: before.dark }
+        : { background: theme?.background || boardTab.surface, dark: theme?.dark ?? false };
+    theme = { ...strip, surface: boardTab.surface };
+    return;
+  }
   const page = activePage();
   // The sign-in screen has its own (it never reports): not the web app's it replaced, whose
   // report is still on the page until the screen's document comes in.
@@ -1087,9 +1322,17 @@ function installIpc(): void {
     const pageId = typeof id === "number" ? id : 0;
     // The page keeps the focus: otherwise the tab bar holds it after a click there, and
     // the next click in the page only moves it back instead of doing what it was for.
-    if (name !== "ready") setTimeout(() => activeContents()?.focus(), 30);
+    // (the tutor's button too: this window no longer steps aside for it)
+    if (name !== "ready") setTimeout(focusActive, 30);
     if (name === "ready") pushState();
-    else if (name === "select") selectPage(pageId);
+    // Tutor on screen (companion.ts): the tutor on or off. This window stays as it is.
+    else if (name === "explain") appEvents.emit("companion-blob");
+    // The Board tab: shown, or, while the board is in its own window, brought here (screenTeach.ts).
+    else if (name === "select" && pageId === BOARD_TAB_ID) {
+      if (boardTab?.view) selectBoardTab({ focus: true });
+      else appEvents.emit("board-tab-open");
+    } else if (name === "select") selectPage(pageId);
+    else if (name === "close" && pageId === BOARD_TAB_ID) appEvents.emit("board-tab-close");
     else if (name === "close") closeTab(pageId);
     else if (name === "new") newTab();
     else if (name === "back") {
@@ -1111,7 +1354,8 @@ function installIpc(): void {
       reading: r.reading === true,
     };
     if (page.incoming && page.chrome.right >= 0) page.incoming();
-    if (page.id !== activeId) return;
+    // (on the Board tab, the page shown before it still colours the strip: adoptTheme)
+    if (page.id !== activeId && !(boardActive() && page === lastShownPage())) return;
     adoptTheme();
     layout();
     pushState();
@@ -1358,6 +1602,9 @@ function wirePage(win: BrowserWindow, page: Page): void {
  */
 export function showSignIn(win: BrowserWindow = focusMainWindow()): void {
   if (win !== getMainWindow()) return;
+  // (screenTeach.ts ends the lesson and drops its page and board, which takes the board out of its
+  // tab before any page here goes)
+  appEvents.emit("main-signed-out");
   clearTimeout(spareTimer);
   let home = homePage();
   for (const page of pages) page.incoming = undefined;

@@ -3,8 +3,8 @@
 The Tutornote app for the Mac: the web app's interface, packaged inside the app and
 served from the app's own origin, talking to the Tutornote API. Plus what a browser
 tab cannot give it: a dock icon, native menus and shortcuts, a remembered window, links
-that open in your browser, the microphone, its own signed-in session, a loading screen,
-and updates that install themselves.
+that open in your browser, the microphone, its own signed-in session, a loader when the
+start is slow, and updates that install themselves.
 
 How it is put together:
 
@@ -51,8 +51,8 @@ and Intel. The app needs an internet connection: it is the website, in a window.
 
 1. Download `Tutornote-<version>-universal.dmg` from the repository's Releases page.
 2. Open it and drag **Tutornote** onto **Applications**.
-3. Open Tutornote from Applications or Spotlight. After a short loading screen the
-   app shows its own sign-in screen: an email and password, or **Continue with Google or Apple**, which signs you in through your browser and
+3. Open Tutornote from Applications or Spotlight. The app opens on its own sign-in
+   screen: an email and password, or **Continue with Google or Apple**, which signs you in through your browser and
    brings you straight back. The account is the same as on the website, and everything
    syncs, because it is the same API.
 
@@ -250,16 +250,12 @@ the caret while a name is typed and closes its eyes while a password is. A wrong
 password gets a head shake; a right one sends a paper plane off from the button while
 the dashboard loads out of sight, and the dashboard takes the screen's place once it has
 drawn, with nothing blank in between. The sign-in screen follows the system's light or
-dark appearance. The loading screen before it (`static/loading.html`) is a little pixel
-computer shaped like Tutornote's folded page: a note is typed on its screen, the note's
-lines turn into a smiley, and "Welcome to Tutornote" is written out underneath; then
-the pictures listed in it (files in `static/loading/`, see the README there) play on the
-computer's screen. The page says when its intro is over (`static/loading.js`), and the app
-opens then, or once its first page has loaded if that is later: at most 10 s
-(`SPLASH_INTRO_MAX_MS` in `src/main/windows.ts`). A click on the computer, or Esc, Return
-or Space, skips it. It plays once per run, at launch; a window reopened from the Dock opens
-straight away. Both hold still for anyone who has asked macOS to reduce motion. The
-sign-in screen
+dark appearance. There is no intro before it: the window shows the moment its first page
+has loaded, and only if that takes longer than a second does a small loader
+(`static/loading.html`, the little pixel computer with a smiley and "Opening Tutornote…")
+show until then; it closes the moment the window shows, however it was shown
+(`src/main/launchReveal.ts`). Both hold still for anyone who has asked macOS to reduce
+motion. The sign-in screen
 signs in against the same endpoints the website uses, from the main process
 (`src/main/signin.ts`):
 
@@ -369,9 +365,7 @@ src/preload/index.ts    window.anothernotes = { platform, version, auth }; repor
 src/preload/toolbar.ts  the tab bar's bridge: what to draw in, what was clicked out
 static/toolbar.html     the tab bar: back, forward, the tabs, new tab
 static/signin.html      the app's sign-in screen: email and password, or the browser
-static/loading.html     the loading screen shown while the first page loads (pixel computer, smiley, welcome)
-static/loading.js       plays the pictures on the loading screen's computer
-static/loading/         the pictures for it (placeholders until they are added)
+static/loading.html     a small loader, shown only when the first page is slow (pixel computer, smiley)
 static/offline.html     shown when the server cannot be reached or is being updated; retries on its own
 scripts/run-mac.sh      build and run in one command (see above)
 scripts/build-renderer.sh  build the web app into renderer/

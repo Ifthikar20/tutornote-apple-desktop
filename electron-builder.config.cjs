@@ -12,6 +12,14 @@
 // above, which include the microphone).
 const speechHelper = require("node:path").join(__dirname, "build", "helpers", "tutornote-speech");
 const hasSpeechHelper = require("node:fs").existsSync(speechHelper);
+// The screen helper (helpers/screen, scripts/build-screen-helper.sh): reads another app's
+// window for "Explain on screen" (src/main/screen.ts). Packaged the same way when built.
+const screenHelper = require("node:path").join(__dirname, "build", "helpers", "tutornote-screen");
+const hasScreenHelper = require("node:fs").existsSync(screenHelper);
+const helpers = [
+  ...(hasSpeechHelper ? [{ from: speechHelper, to: "tutornote-speech" }] : []),
+  ...(hasScreenHelper ? [{ from: screenHelper, to: "tutornote-screen" }] : []),
+];
 
 const notarize = Boolean(
   process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID,
@@ -74,7 +82,7 @@ module.exports = {
       NSSpeechRecognitionUsageDescription:
         "Tutornote uses speech recognition so the words you dictate appear as you say them.",
     },
-    ...(hasSpeechHelper ? { extraResources: [{ from: speechHelper, to: "tutornote-speech" }] } : {}),
+    ...(helpers.length ? { extraResources: helpers } : {}),
   },
   dmg: {
     title: "Tutornote",

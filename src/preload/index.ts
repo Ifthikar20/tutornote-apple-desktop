@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-import { contextBridge, ipcRenderer, webFrame } from "electron";
+import { contextBridge, ipcRenderer, webFrame, type IpcRendererEvent } from "electron";
 
 /*
   The bridge between the web app and the desktop shell. Deliberately tiny: the web app
@@ -8,6 +8,8 @@ import { contextBridge, ipcRenderer, webFrame } from "electron";
   (signin.ts in the main process, which checks every argument), or through the browser
   (auth.ts). Nothing else is exposed, and every call is a fixed channel. This file runs
   sandboxed, with context isolation, so the page never sees Node.
+  The see-through window of a lesson over another app (src/main/screenTeach.ts) loads it
+  too, with one more part: that lesson's bridge (screenTeach, below).
 */
 
 const VERSION_FLAG = "--anothernotes-version=";
@@ -15,6 +17,11 @@ const versionArg = process.argv.find((arg) => arg.startsWith(VERSION_FLAG));
 /* The main process has the Mac's speech helper (src/main/speech.ts): this page gets a
    SpeechRecognition of its own over it (below), and tells the web app so (speech.native). */
 const nativeSpeech = process.argv.includes("--anothernotes-speech=1");
+/* The lesson's see-through window (src/main/screenTeach.ts), not a tab: it gets the
+   screenTeach bridge, and none of what keeps the window's tabs in step with the window
+   (the sidebar followed across tabs, the room made for the tab bar, link routing, the
+   layout reports). The cookie store and the speech shim are the same as a tab's. */
+const screenTeach = process.argv.includes("--anothernotes-screen-teach=1");
 
 /*
   The speech bridge. A recogniser of the page (the shim below) starts a session here
@@ -22,11 +29,37 @@ const nativeSpeech = process.argv.includes("--anothernotes-speech=1");
   flight), phrase (continuous: one finished), error (a Web Speech API code), end (and,
   for one utterance, its text). Sessions are numbered per page; the main process maps
   them to the helper's.
+  A start may carry options: `preroll` (unix ms: the student's press; the words said since
+  are fed from the microphone's ring) and `hints` (the lesson's words, for Apple's recogniser
+  to expect). Only those two go, and only as a number and a list of strings: the main process
+  checks them again (speechLog.ts speechStartOptions). warm and prepare get the microphone and
+  the recogniser ready for a start about to come (src/main/speech.ts).
+  output and onOutput: where the tutor's voice plays ({name, transport, source, speakers}: the
+  Mac's default output, and whether the microphone can hear it), now (null while unknown) and on
+  every change. Only those four go to the page, as strings and a boolean.
 */
 interface SpeechEvent {
   ev: string;
   text?: string;
   code?: string;
+}
+
+/** A start's options as they go to the main process: a finite `preroll`, string `hints`, nothing else. */
+function speechStartOptions(opts: unknown): { preroll?: number; hints?: string[] } | undefined {
+  if (typeof opts !== "object" || opts === null) return undefined;
+  const { preroll, hints } = opts as { preroll?: unknown; hints?: unknown };
+  const out: { preroll?: number; hints?: string[] } = {};
+  if (typeof preroll === "number" && Number.isFinite(preroll)) out.preroll = preroll;
+  if (Array.isArray(hints)) out.hints = hints.filter((hint): hint is string => typeof hint === "string");
+  return out.preroll !== undefined || out.hints ? out : undefined;
+}
+/** Where the voice plays, as the page gets it: the four fields with their types, or null. */
+function outputRouteOf(value: unknown): { name: string; transport: string; source: string; speakers: boolean } | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { name, transport, source, speakers } = value as Record<string, unknown>;
+  if (typeof speakers !== "boolean") return null;
+  const text = (v: unknown): string => (typeof v === "string" ? v : "");
+  return { name: text(name), transport: text(transport), source: text(source), speakers };
 }
 const speechListeners = new Map<number, (event: SpeechEvent) => void>();
 let speechRef = 0;
@@ -46,11 +79,19 @@ if (nativeSpeech) {
 const speechBridge = Object.freeze({
   /** The words appear as they are said, on this Mac: the web app may treat it as a browser's recogniser. */
   native: true,
-  start: (lang: unknown, continuous: unknown, onEvent: (event: SpeechEvent) => void): number => {
+  start: (lang: unknown, continuous: unknown, onEvent: (event: SpeechEvent) => void, opts?: unknown): number => {
     const ref = ++speechRef;
     speechListeners.set(ref, onEvent);
-    ipcRenderer.send("speech:start", ref, typeof lang === "string" ? lang : "", continuous === true);
+    ipcRenderer.send("speech:start", ref, typeof lang === "string" ? lang : "", continuous === true, speechStartOptions(opts));
     return ref;
+  },
+  /** Keep the microphone running for `ms` (a start about to come); 0 lets it go. Never asks for it. */
+  warm: (ms: unknown): void => {
+    if (typeof ms === "number" && Number.isFinite(ms)) ipcRenderer.send("speech:warm", ms);
+  },
+  /** Make the recogniser for `lang` now, when both permissions are given. Never asks. */
+  prepare: (lang: unknown): void => {
+    if (typeof lang === "string") ipcRenderer.send("speech:prepare", lang);
   },
   stop: (ref: unknown): void => {
     if (typeof ref === "number") ipcRenderer.send("speech:stop", ref);
@@ -60,6 +101,158 @@ const speechBridge = Object.freeze({
     speechListeners.delete(ref);
     ipcRenderer.send("speech:abort", ref);
   },
+  /** Where the tutor's voice plays now ({name, transport, source, speakers}), or null while that is
+   *  not known. Asking it also has every change told to onOutput. */
+  output: (): Promise<unknown> => ipcRenderer.invoke("speech:output").then(outputRouteOf, () => null),
+  /** Every change of where the voice plays, once output() has been asked. Returns the way to stop. */
+  onOutput: (cb: unknown): (() => void) =>
+    typeof cb === "function"
+      ? listen("speech:output", (value: unknown) => {
+          const route = outputRouteOf(value);
+          if (route) (cb as (route: unknown) => void)(route);
+        })
+      : () => undefined,
+});
+
+/*
+  The lesson over another app's window: the web app's ScreenTeachBridge (its
+  src/lib/screen/types.ts), method for method. The main process checks that each call
+  comes from the lesson's window and checks every argument.
+*/
+function listen(channel: string, cb: unknown): () => void {
+  if (typeof cb !== "function") return () => undefined;
+  const listener = (_event: IpcRendererEvent, value: unknown): void => (cb as (value: unknown) => void)(value);
+  ipcRenderer.on(channel, listener);
+  return () => void ipcRenderer.removeListener(channel, listener);
+}
+const screenTeachBridge = Object.freeze({
+  /** The page is mounted: the start it is to run, or null. */
+  ready: (): Promise<unknown> => ipcRenderer.invoke("screen-teach:ready"),
+  /** A new pick while the page is open. Returns the way to stop listening. */
+  onStart: (cb: unknown): (() => void) => listen("screen-teach:start", cb),
+  started: (): void => ipcRenderer.send("screen-teach:started"),
+  interactive: (on: unknown): void => ipcRenderer.send("screen-teach:interactive", on === true),
+  turn: (request: unknown): Promise<unknown> => ipcRenderer.invoke("screen-teach:turn", request),
+  /** Read the window again. `opts.fast`: a quick check of where the words are (after a scroll). */
+  reread: (run: unknown, opts?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("screen-teach:reread", run, { fast: (opts as { fast?: unknown } | undefined)?.fast === true }),
+  allowTurning: (): Promise<unknown> => ipcRenderer.invoke("screen-teach:allow-turning"),
+  openSettings: (which: unknown): void => ipcRenderer.send("screen-teach:open-settings", which),
+  openInMain: (path: unknown): void => ipcRenderer.send("screen-teach:open-in-main", path),
+  /** The global shortcuts while the lesson is on screen, and "close" when it is closed from the app. */
+  onCommand: (cb: unknown): (() => void) => listen("screen-teach:command", cb),
+  /** The student's taps on the page being read (the window lets them through; the helper hears them).
+   *  With the companion on, `id` is the release the page heard first (onCompanionRelease). */
+  onTap: (cb: unknown): (() => void) => listen("screen-teach:tap", cb),
+  /** The student scrolling the page being read, as it happens. */
+  onScroll: (cb: unknown): (() => void) => listen("screen-teach:scroll", cb),
+  /** Start the lesson afresh from a tap on words it has not read yet. */
+  pickAt: (point: unknown): void => ipcRenderer.send("screen-teach:pick-at", point),
+  close: (): void => ipcRenderer.send("screen-teach:close"),
+  /** The board in its own window (the page opens it, empty, and draws into it): whether this
+   *  run's board has something on it, whether it is zoomed, and its colour. */
+  board: (state: unknown): void => ipcRenderer.send("screen-teach:board", state),
+  /** That window's red light or ⌘W ("close") and green light ("zoom", "unzoom"). A channel of
+   *  its own: a page older than it would take an unknown command for a key. */
+  onBoardControl: (cb: unknown): (() => void) => listen("screen-teach:board-control", cb),
+  /** Where the board lives ({ where, canMove, covering, app? }), on every change. */
+  onBoardPlace: (cb: unknown): (() => void) => listen("screen-teach:board-place", cb),
+  /** The same, now (null with no board). Asking it tells the Mac app this page knows tabs. */
+  boardPlace: (): Promise<unknown> => ipcRenderer.invoke("screen-teach:board-place-now"),
+  /** The student moved the board: "tab" | "float". */
+  moveBoard: (to: unknown): void => ipcRenderer.send("screen-teach:board-move", to),
+  /** The student asked for the app being read (Back to {app}). */
+  backToApp: (): void => ipcRenderer.send("screen-teach:back-to-app"),
+
+  /*
+    The desktop companion (src/main/companion.ts): the tutor that trails the cursor over any app.
+    Every point is the window's own (screen points less its top left), as above. The page
+    feature-detects each of these, so it runs on a Mac app older than the companion as before.
+  */
+  /** The companion on ({on, overlay, from?, first}) or off ({on: false, to?}: the tutor flies home). */
+  onCompanion: (cb: unknown): (() => void) => listen("screen-teach:companion", cb),
+  /** The companion's state as the page starts (a reload too), or null when it is off. */
+  companionState: (): Promise<unknown> => ipcRenderer.invoke("screen-teach:companion-state"),
+  /** A glance at a window ({window, read, ground, fast, keepCard?, tap?, empty?}): its lines, read on
+   *  this Mac, for the pointer and for where a tap lands. `keepCard`: the new look of the card's own
+   *  tap, so the card stays; `tap`: the careful read taken at that release, now the window's glance;
+   *  `empty`: no lines on a second look too (the window is blank now), so it replaces one with lines. */
+  onGlance: (cb: unknown): (() => void) => listen("screen-teach:glance", cb),
+  /** What the cursor is over ({window | null, own?, private?, reading?}). */
+  onOver: (cb: unknown): (() => void) => listen("screen-teach:over", cb),
+  /** The button went down on another app's window ({window, x, y}), before anything is judged. */
+  onPress: (cb: unknown): (() => void) => listen("screen-teach:press", cb),
+  /** A tap on another app's window that did nothing there ({window, x, y, id?}): the card is
+   *  offered (`id`: the release it was opened for at once, if it was). */
+  onCompanionTap: (cb: unknown): (() => void) => listen("screen-teach:companion-tap", cb),
+  /** A tap just ended on another app's window, before it is judged ({id, window, x, y, alt, hand,
+   *  clicks, lesson, run?, private?}): the page may paint the card in this frame. `hand`: the
+   *  cursor was a pointing hand (a link); `lesson`: on the lesson's own window (`run`); `private`:
+   *  a window never read. */
+  onCompanionRelease: (cb: unknown): (() => void) => listen("screen-teach:companion-release", cb),
+  /** That release was the app's after all ({id, why}: it acted, or a double click selected words):
+   *  a card opened for it goes at once. */
+  onCompanionWithdraw: (cb: unknown): (() => void) => listen("screen-teach:companion-withdraw", cb),
+  /** The student scrolled another app's window ({window, dy, dx}). */
+  onWindowScroll: (cb: unknown): (() => void) => listen("screen-teach:window-scroll", cb),
+  /** The lesson's window settled into a new look ({run, window}): a page the student turned. */
+  onChanged: (cb: unknown): (() => void) => listen("screen-teach:changed", cb),
+  /** The student went to another app (true), or came back (false); the window stays up. */
+  onAside: (cb: unknown): (() => void) => listen("screen-teach:aside", cb),
+  /** Whether the student is with the lesson (false: in another app), with or without the companion,
+   *  and as the page starts while they are away. The page's mics follow it, not the window's focus
+   *  (the window never takes the keys with the companion on). */
+  onPresent: (cb: unknown): (() => void) =>
+    typeof cb === "function" ? listen("screen-teach:present", (present: unknown) => (cb as (present: boolean) => void)(present === true)) : () => undefined,
+  /** ⌃⌥M, from any app: a tap on the page's mic (one question, an interrupt, or talk mode off, as
+   *  the page's tap rule says). A channel of its own: a page older than it would take an unknown
+   *  command for a key. */
+  onTalk: (cb: unknown): (() => void) =>
+    typeof cb === "function" ? listen("screen-teach:talk", () => (cb as () => void)()) : () => undefined,
+  /** The talk chord, Control and Option held on their own from any app ({kind, ms}): "down" (held
+   *  300 ms: the hold's ring), "tap" (let go within 700 ms: a tap on the mic), "hold" (5 s: talk
+   *  mode on), "up" (let go after a hold), "cancel" (spoiled, or let go too late for a tap). Only a
+   *  kind of those five and a finite ms reach the page. A channel of its own, for the same reason. */
+  onChord: (cb: unknown): (() => void) =>
+    typeof cb === "function"
+      ? listen("screen-teach:chord", (value: unknown) => {
+          const c = (typeof value === "object" && value !== null ? value : {}) as { kind?: unknown; ms?: unknown };
+          const kind = c.kind;
+          if (kind !== "down" && kind !== "tap" && kind !== "hold" && kind !== "up" && kind !== "cancel") return;
+          if (typeof c.ms !== "number" || !Number.isFinite(c.ms)) return;
+          (cb as (chord: { kind: string; ms: number }) => void)({ kind, ms: c.ms });
+        })
+      : () => undefined,
+  /** The cursor, fed from the Mac app while the page asks for it (cursorFeed "main"). */
+  onCursor: (cb: unknown): (() => void) => listen("screen-teach:cursor", cb),
+  /** The card's pick ({window, x, y, choice, tap?, row?}: "explain" or "ask", the point as tapped,
+   *  the release it opened for, the tapped row's words): resolves {ok: true}, or {ok: false,
+   *  reason} when the window could not be read ("failed"), is private, or the tutor is off. */
+  explainAt: (request: unknown): Promise<unknown> => ipcRenderer.invoke("screen-teach:explain-at", request),
+  /** The card went without a pick: the careful read made for it is no longer its. */
+  cardClosed: (): void => ipcRenderer.send("screen-teach:card-closed"),
+  /** The card's box after each paint ({x, y, w, h}, the page's own points), or null once it has
+   *  gone: the Mac app gives the page the clicks over it at once, ahead of the page's own word.
+   *  Anything but four finite numbers is sent as null. */
+  cardBox: (box: unknown): void => {
+    const b = (typeof box === "object" && box !== null ? box : {}) as { x?: unknown; y?: unknown; w?: unknown; h?: unknown };
+    const ok = [b.x, b.y, b.w, b.h].every((v) => typeof v === "number" && Number.isFinite(v));
+    ipcRenderer.send("screen-teach:card-box", ok ? { x: b.x, y: b.y, w: b.w, h: b.h } : null);
+  },
+  /** A text field of the page is in use: the window takes the keys (true) until false. */
+  wantKeys: (on: unknown): void => ipcRenderer.send("screen-teach:want-keys", on === true),
+  /** Where the page gets the cursor: its own mouse moves ("page"), or the Mac app's feed ("main"). */
+  cursorFeed: (from: unknown): void => ipcRenderer.send("screen-teach:cursor-feed", from === "main" ? "main" : "page"),
+  /** The student's × in the page's dock with the companion on: the tutor turns off. */
+  companionOff: (): void => ipcRenderer.send("screen-teach:companion-off"),
+  /** The student paused the tutor from a dock (true) or played it on (false). */
+  companionHold: (held: unknown): void => ipcRenderer.send("screen-teach:companion-hold", held === true),
+  /** The page shows a dock of its own while the companion is on (true), or no longer (false). */
+  companionDock: (on: unknown): void => ipcRenderer.send("screen-teach:companion-dock", on === true),
+  /** A tap in a reader that the app used ({window, app, x, y}). No longer sent (the helper now
+   *  reads the tapped words, so a tap on a reader's words is the tutor's): kept for a page that
+   *  still listens. */
+  onTapDropped: (cb: unknown): (() => void) => listen("screen-teach:tap-dropped", cb),
 });
 
 contextBridge.exposeInMainWorld(
@@ -68,6 +261,7 @@ contextBridge.exposeInMainWorld(
     platform: process.platform,
     version: versionArg ? versionArg.slice(VERSION_FLAG.length) : "",
     ...(nativeSpeech ? { speech: speechBridge } : {}),
+    ...(screenTeach ? { screenTeach: screenTeachBridge } : {}),
     auth: Object.freeze({
       /** Sign in with an email and password; on success the window moves to the dashboard. */
       signIn: (form: { email: string; password: string }): Promise<unknown> =>
@@ -198,12 +392,22 @@ function reportChrome(): void {
   Continuous: every finished phrase is one final result, kept in order, and the words in
   flight the one interim result after them. One utterance: a single result at index 0,
   interim until the utterance is done, then final, then end.
+
+  Two fields of the Mac's own, set before start() (the web app's createNativeRecognizer does,
+  when speech.native): tutornotePreroll (unix ms, the student's press: the words said since
+  are fed from the microphone's ring) and tutornoteHints (the lesson's words). A browser's
+  recogniser has neither, and ignores them.
 */
 if (nativeSpeech) {
   contextBridge.executeInMainWorld({
     func: () => {
       type Bridge = {
-        start: (lang: string, continuous: boolean, onEvent: (event: { ev: string; text?: string; code?: string }) => void) => number;
+        start: (
+          lang: string,
+          continuous: boolean,
+          onEvent: (event: { ev: string; text?: string; code?: string }) => void,
+          opts?: { preroll?: number; hints?: string[] },
+        ) => number;
         stop: (ref: number) => void;
         abort: (ref: number) => void;
       };
@@ -230,6 +434,9 @@ if (nativeSpeech) {
         onnomatch: ((e: Event) => void) | null = null;
         onerror: ((e: Event) => void) | null = null;
         onend: ((e: Event) => void) | null = null;
+        /** The Mac's own: where the first request's audio starts (unix ms), and the lesson's words. */
+        tutornotePreroll: number | undefined = undefined;
+        tutornoteHints: string[] | undefined = undefined;
         private ref: number | null = null;
         private finals: string[] = [];
 
@@ -249,7 +456,10 @@ if (nativeSpeech) {
         start(): void {
           if (this.ref !== null) throw new DOMException("recognition has already started", "InvalidStateError");
           this.finals = [];
-          const ref = bridge.start(this.lang || navigator.language || "en-US", !!this.continuous, (event) => this.on(ref, event));
+          const opts: { preroll?: number; hints?: string[] } = {};
+          if (typeof this.tutornotePreroll === "number") opts.preroll = this.tutornotePreroll;
+          if (Array.isArray(this.tutornoteHints)) opts.hints = this.tutornoteHints;
+          const ref = bridge.start(this.lang || navigator.language || "en-US", !!this.continuous, (event) => this.on(ref, event), opts);
           this.ref = ref;
         }
 
@@ -576,7 +786,7 @@ function followSidebarWidth(value: string | null): void {
   }
 }
 
-if (location.protocol === "app:") {
+if (!screenTeach && location.protocol === "app:") {
   window.addEventListener("storage", (event) => {
     if (event.key === COOKIE_JAR_KEY) {
       if (sidebarEntry(event.newValue) !== sidebarEntry(event.oldValue)) settleSidebar();
@@ -594,7 +804,7 @@ if (location.protocol === "app:") {
 }
 
 /* Last, so that everything they use above is defined (sidebarSettled for reportChrome). */
-if (location.protocol === "app:" || location.protocol === "http:" || location.protocol === "https:") {
+if (!screenTeach && (location.protocol === "app:" || location.protocol === "http:" || location.protocol === "https:")) {
   webFrame.insertCSS(SHELL_CSS);
   routeLinks();
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", reportChrome);

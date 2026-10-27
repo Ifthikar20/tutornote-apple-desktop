@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded in the screen helper's binary (__TEXT,__info_plist; scripts/build-screen-helper.sh).
+     The helper is its own "responsible" process (main.swift disclaims), so System Settings >
+     Privacy & Security > Screen Recording lists it by these names, whoever started the app. -->
+<plist version="1.0">
+  <dict>
+    <key>CFBundleIdentifier</key>
+    <string>app.tutornote.desktop.screen</string>
+    <key>CFBundleName</key>
+    <string>Tutornote Screen Reader</string>
+    <key>CFBundleDisplayName</key>
+    <string>Tutornote</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+  </dict>
+</plist>

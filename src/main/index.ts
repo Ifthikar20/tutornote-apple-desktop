@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, systemPreferences, type IpcMainInvokeEvent } from "electron";
+import { app, ipcMain, session, systemPreferences, type IpcMainInvokeEvent } from "electron";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beginBrowserSignIn, cancelBrowserSignIn, deepLinksIn, handleDeepLink, registerProtocol } from "./auth";
@@ -17,12 +17,15 @@ import {
   SITE_ORIGIN,
   WEBSITE_URL,
 } from "./config";
+import { installCompanion } from "./companion";
+import { installExplain } from "./explain";
 import { installMenu } from "./menu";
 import { installRenderer, registerAppScheme, rendererBuild } from "./renderer";
+import { installScreenTeach } from "./screenTeach";
 import { installSignIn } from "./signin";
 import { installSpeech } from "./speech";
 import { installUpdater } from "./updater";
-import { createMainWindow, focusMainWindow, getMainWindow, setBrowserSignIn, showSignIn } from "./windows";
+import { createMainWindow, focusMainWindow, getMainWindow, setBrowserSignIn, showMainWindow, showSignIn } from "./windows";
 
 /*
   Tutornote for the desktop, v0: the live web app in a window of its own.
@@ -47,6 +50,9 @@ registerAppScheme();
 
 // Links the OS hands us before the window exists (a cold start from a link).
 let queuedLinks: string[] = deepLinksIn(process.argv);
+// The first main window has been made (whenReady, below). Set once, never reset: before it the
+// Dock has nothing to show, and a window made for a click then would be a second one.
+let launched = false;
 
 // One running copy. A second launch (a double-click on the dock, a link) focuses it.
 if (!app.requestSingleInstanceLock()) {
@@ -78,8 +84,15 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== "darwin") app.quit();
   });
 
+  // The Dock icon brings the main window back when it was closed, or hidden by "Explain on
+  // screen" (explain.ts) for a lesson started from its tab bar. Not "when there are no
+  // windows": the lesson over another app (screenTeach.ts) keeps its window, hidden, between
+  // lessons, and that must not stop the main one from reopening. During a slow start it shows
+  // the window at once, and the loader goes (windows.ts showMainWindow); before the first window
+  // is made at all, nothing.
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+    if (!launched) return;
+    showMainWindow();
   });
 
   void app.whenReady().then(async () => {
@@ -191,6 +204,13 @@ if (!app.requestSingleInstanceLock()) {
     installSignIn(trusted);
     // Dictation and Teach mode through the Mac's own speech recognition (speech.ts).
     installSpeech();
+    // Explain on screen: the tutor teaches the page in another app's window (explain.ts
+    // picks and reads it, screenTeach.ts runs the lesson over it).
+    installExplain();
+    installScreenTeach();
+    // The desktop companion: the tutor's blob, and the tutor following the cursor over any app
+    // (companion.ts). After the two above, whose lesson window and checks it uses.
+    installCompanion();
     ipcMain.handle("auth:cancel-browser-sign-in", (event) => {
       if (!trusted(event)) throw new Error("not allowed");
       cancelBrowserSignIn();
@@ -202,9 +222,10 @@ if (!app.requestSingleInstanceLock()) {
     );
 
     installMenu();
-    // After the loading screen: the web app when there is a session, the app's own
-    // sign-in screen when there is not (signin.ts).
+    // The web app when there is a session, the app's own sign-in screen when there is not
+    // (signin.ts).
     createMainWindow((await hasSession()) ? "app" : "signin");
+    launched = true;
     installUpdater();
 
     for (const link of queuedLinks) handleDeepLink(link);

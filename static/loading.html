@@ -5,30 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!-- The window's own name (Electron takes it from here): what VoiceOver and the Dock call it. -->
     <title>Opening Tutornote…</title>
-    <!-- Its own files only: this script (loading.js) and the pictures in static/loading/. -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:"
-    />
+    <!-- Nothing but this page: no script, nothing fetched. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'" />
     <style>
       /*
-        The loading screen: a little pixel computer, shaped like Tutornote's folded page,
-        says hello. Page time (the clock starts when the page first paints):
-
-          0.0 s   the computer pops up, its screen switches on
-          0.55 s  a note is typed on the screen, line by line (1.7 s: done, held a moment)
-          2.0 s   the note's lines turn into a smiley face (done 2.65 s; it blinks at 3.0 s)
-          2.35 s  "Welcome to Tutornote" is written out underneath (done 3.3 s)
-          3.1 s   "Getting your notes ready…" (in by 3.6 s)
-          3.8 s   the pictures in .slides (static/loading/) play on the screen, one after
-                  another, then the smiley again (loading.js)
-
-        loading.js tells the app when this intro is over - after the welcome, or after
-        every picture has played once - and the app opens then, or once its first page has
-        loaded if that is later (src/main/windows.ts; never later than SPLASH_INTRO_MAX_MS).
-        A click on the computer, or Esc, Return or Space, ends the intro early. Shown once
-        per run, at launch. Everything is drawn here; nothing is fetched. Always light, like
-        the reference. Reduced motion: the smiley and the welcome, still, for about a second.
+        The loader: shown only when the app's first page takes longer than a second to load
+        (src/main/windows.ts, launchReveal.ts), and closed the moment the window shows. So it
+        reads from its first frame: the little pixel computer, shaped like Tutornote's folded
+        page, with a smiley on its screen that blinks now and then, and one line under it. The
+        whole page fades in over 150 ms, so a loader that is only just needed does not flash.
+        Everything is drawn here; nothing is fetched and nothing runs. Always light. Reduced
+        motion: all of it still.
       */
       :root {
         color-scheme: light;
@@ -44,7 +31,6 @@
         --bezel: #45474d;
         --screen: #dfe5ff;
         --screen-glow: #eef1ff;
-        --glass: radial-gradient(ellipse at 40% 30%, var(--screen-glow), var(--screen) 70%);
         --glyph: #2f3566;
         --led-on: #8fd8c6;
         --led-amber: #f5b301;
@@ -65,28 +51,22 @@
         user-select: none;
         -webkit-app-region: drag;
       }
-      main { display: flex; flex-direction: column; align-items: center; text-align: center; }
+      main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        animation: fadein 0.15s ease-out both;
+      }
+      @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 
       /* ---- The computer ----------------------------------------------------------- */
-      /* Drawn on a 44 x 52 pixel grid, 4 screen pixels each: crisp edges, no smoothing.
-         Clicking it ends the intro (loading.js), so it is not part of the drag area. */
-      .computer {
-        position: relative;
-        width: 176px;
-        height: 208px;
-        -webkit-app-region: no-drag;
-        animation: popup 0.42s cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
-        transform-origin: 50% 100%;
-      }
+      /* Drawn on a 44 x 52 pixel grid, 4 screen pixels each: crisp edges, no smoothing. */
+      .computer { position: relative; width: 176px; height: 208px; }
       .computer > svg { display: block; width: 100%; height: 100%; shape-rendering: crispEdges; }
-      @keyframes popup {
-        from { opacity: 0; transform: translateY(10px) scale(0.92); }
-        to { opacity: 1; transform: none; }
-      }
 
       /* The screen: 30 x 20 grid pixels at (7, 10), so 120 x 80 at (28, 40), below the
-         folded corner. Everything that runs on it - the note, the face, the pictures - is
-         in here, clipped to it. 120 x 80 is 3:2. */
+         folded corner. */
       .screen {
         position: absolute;
         left: 28px;
@@ -94,184 +74,38 @@
         width: 120px;
         height: 80px;
         overflow: hidden;
-        background: var(--bezel);
+        background: radial-gradient(ellipse at 40% 30%, var(--screen-glow), var(--screen) 70%);
       }
-      .screen::before {
-        /* Switching on: the glass lights up from a line in the middle, like an old tube. */
-        content: "";
-        position: absolute;
-        inset: 0;
-        background: var(--glass);
-        animation: power 0.32s ease-out 0.28s both;
-      }
-      @keyframes power {
-        0% { transform: scaleY(0.02) scaleX(0.4); opacity: 0.4; filter: brightness(1.8); }
-        60% { transform: scaleY(0.04) scaleX(1); opacity: 1; filter: brightness(1.6); }
-        100% { transform: none; opacity: 1; filter: none; }
-      }
-      .screen > svg.face { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-      /* Scan lines, very faint, over everything on the screen (pictures included). */
+      /* Scan lines, very faint, over the face. */
       .screen::after {
         content: "";
         position: absolute;
         inset: 0;
         pointer-events: none;
         background: repeating-linear-gradient(to bottom, rgba(47, 53, 102, 0.05) 0 1px, transparent 1px 3px);
-        animation: fadein 0.3s 0.5s both;
       }
+      .screen > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 
-      /* ---- The note, typed; then the face it turns into ----------------------------- */
-      /* Every stroke has the same shape (M, Q), so the browser can morph one into another.
-         Widths are whole pixels on whole-pixel centres: crisp, like the computer. */
-      .g {
-        fill: none;
-        stroke: var(--glyph);
-        stroke-linecap: square;
-        stroke-dasharray: 1 1.1;
-        stroke-dashoffset: 1.05;
-      }
-      .g.title { stroke-width: 6px; d: path("M 14 18 Q 36 18 58 18"); animation: type 0.3s steps(9) 0.55s forwards, to-left-eye 0.6s cubic-bezier(0.6, 0, 0.2, 1) 2s forwards; }
-      .g.l1 { stroke-width: 4px; d: path("M 14 33 Q 60 33 106 33"); animation: type 0.32s steps(16) 0.88s forwards, to-right-eye 0.6s cubic-bezier(0.6, 0, 0.2, 1) 2.04s forwards; }
-      .g.l2 { stroke-width: 4px; d: path("M 14 46 Q 54 46 94 46"); animation: type 0.28s steps(14) 1.22s forwards, to-smile 0.55s cubic-bezier(0.6, 0, 0.2, 1) 2.08s forwards; }
-      .g.l3 { stroke-width: 4px; d: path("M 14 59 Q 40 59 66 59"); animation: type 0.18s steps(9) 1.52s forwards, into-l2 0.25s cubic-bezier(0.5, 0, 0.5, 1) 2s forwards; }
-      @keyframes type { to { stroke-dashoffset: 0; } }
-      /* Each eye line rolls up into a dot at its eye, then opens upward; the last line
-         folds up into the one that becomes the smile. */
-      @keyframes to-left-eye {
-        50% { d: path("M 44 29.5 Q 44 29.5 44 29.5"); stroke-width: 6px; }
-        to { d: path("M 44 24 Q 44 29.5 44 35"); stroke-width: 6px; }
-      }
-      @keyframes to-right-eye {
-        50% { d: path("M 76 29.5 Q 76 29.5 76 29.5"); stroke-width: 6px; }
-        to { d: path("M 76 24 Q 76 29.5 76 35"); stroke-width: 6px; }
-      }
-      @keyframes to-smile { to { d: path("M 40 50 Q 60 66 80 50"); stroke-width: 5px; } }
-      @keyframes into-l2 { to { d: path("M 14 46 Q 54 46 94 46"); opacity: 0; } }
+      /* ---- The face ----------------------------------------------------------------- */
+      /* Whole pixels on whole pixel centres: crisp, like the computer. */
+      .face { fill: none; stroke: var(--glyph); stroke-linecap: square; }
+      .eye { stroke-width: 6px; }
+      .smile { stroke-width: 5px; }
+      .cheek { fill: #f59ab0; }
+      /* A blink every few seconds, the only thing that moves. */
+      .eyes { transform-box: fill-box; transform-origin: 50% 50%; animation: wink 3.2s ease-in-out 0.6s infinite; }
+      @keyframes wink { 0%, 6%, 100% { transform: none; } 3% { transform: scaleY(0.12); } }
 
-      /* Word breaks, so the note reads as writing, not bars. They close up just before the
-         lines start to move (2.0 s): a fixed mask over moving strokes would chop them. */
-      .gaps { animation: fadeout 0.07s linear 1.92s forwards; }
-      @keyframes fadeout { to { opacity: 0; } }
-
-      /* The typing cursor, in step with the typing (0.55-0.85 s, 0.88-1.20 s, 1.22-1.50 s,
-         1.52-1.70 s): it rides along each line and jumps to the start of the next. */
-      .cursor { fill: var(--glyph); opacity: 0; animation: cursor-walk 1.25s linear 0.5s forwards; }
-      @keyframes cursor-walk {
-        0%, 4% { opacity: 1; transform: translate(14px, 14px); }
-        28% { transform: translate(60px, 14px); }
-        28.1%, 30.4% { transform: translate(14px, 29px); }
-        56% { transform: translate(108px, 29px); }
-        56.1%, 57.6% { transform: translate(14px, 42px); }
-        80% { transform: translate(96px, 42px); }
-        80.1%, 81.6% { transform: translate(14px, 55px); }
-        96% { opacity: 1; transform: translate(68px, 55px); }
-        100% { opacity: 0; transform: translate(68px, 55px); }
-      }
-
-      /* Rosy cheeks, once the smile has curved; and a blink soon after the face settles,
-         and again each time it comes back from the pictures (loading.js adds .back). */
-      .cheek { fill: #f59ab0; opacity: 0; animation: fadein 0.4s 2.7s forwards; }
-      .eyes { transform-box: fill-box; transform-origin: 50% 50%; }
-      .screen:not(.showing) .eyes { animation: wink 2.4s ease-in-out 2.9s infinite; }
-      .screen.back:not(.showing) .eyes { animation-delay: 0.9s; }
-      @keyframes wink { 0%, 8%, 100% { transform: none; } 4% { transform: scaleY(0.12); } }
-
-      /* ---- Pictures on the screen (placeholders until the real ones are added) ------ */
-      /* Picture to picture: the one coming in fades in over the one going out, which only
-         goes once it is covered - no flash of the glass between two dark pictures. Each
-         picture sits on the glass, so a transparent one covers the one before it too. */
-      .slides { position: absolute; inset: 0; isolation: isolate; } /* keeps .on's z-index under the scan lines */
-      .slide {
-        position: absolute;
-        inset: 0;
-        margin: 0;
-        opacity: 0;
-        transform: scale(1.04);
-        background: var(--glass);
-        transition: opacity 0.45s ease, transform 0.6s ease;
-      }
-      .slide.on { opacity: 1; transform: none; z-index: 1; }
-      .screen.showing .slide:not(.on) { transition: opacity 0s linear 0.45s, transform 0s linear 0.6s; }
-      .slide img { display: block; width: 100%; height: 100%; object-fit: cover; }
-      /* While a picture is up, the face steps back behind it. */
-      .screen .face { transition: opacity 0.45s ease 0.15s; }
-      .screen.showing .face { opacity: 0; transition: opacity 0.3s ease; }
-      /* A placeholder: a soft card that says where a picture goes. Replace each
-         <figure class="slide placeholder"> with <figure class="slide"><img …></figure>. */
-      .placeholder {
-        display: grid;
-        place-items: center;
-        align-content: center;
-        gap: 4px;
-        background: var(--tint, #fff3d6);
-        color: rgba(30, 30, 30, 0.6);
-        font: 600 9px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-        letter-spacing: 0.02em;
-        text-transform: uppercase;
-      }
-      .placeholder svg { width: 26px; height: 26px; shape-rendering: crispEdges; }
-      .placeholder::after {
-        content: "";
-        position: absolute;
-        inset: 6px;
-        border: 1.5px dashed rgba(30, 30, 30, 0.22);
-        border-radius: 3px;
-      }
-
-      /* ---- The words ---------------------------------------------------------------- */
-      .pen { position: relative; margin: 18px 0 0; }
-      .welcome {
-        position: relative;
-        margin: 0;
-        font-family: "Snell Roundhand", "Apple Chancery", "Bradley Hand", cursive;
-        font-weight: 700;
-        font-size: 34px;
-        line-height: 1.15;
-        letter-spacing: 0.01em;
-        white-space: nowrap;
-        /* Written out from left to right, as by a pen, once the face has come. */
-        clip-path: inset(-20% 100% -30% 0);
-        animation: write 0.95s cubic-bezier(0.45, 0.05, 0.4, 1) 2.35s forwards;
-      }
-      .welcome b { font-weight: 700; color: var(--ink); }
-      @keyframes write { to { clip-path: inset(-20% -4% -30% 0); } }
-      /* The pen's nib, riding along the end of the words as they are written. */
-      .nib {
-        position: absolute;
-        top: 50%;
-        left: 0;
-        width: 6px;
-        height: 6px;
-        margin: -3px 0 0 -3px;
-        border-radius: 50%;
-        background: var(--led-amber);
-        box-shadow: 0 0 0 3px rgba(245, 179, 1, 0.22);
-        opacity: 0;
-        animation: nib 0.95s cubic-bezier(0.45, 0.05, 0.4, 1) 2.35s forwards;
-      }
-      @keyframes nib {
-        0% { left: 0; opacity: 1; }
-        92% { opacity: 1; }
-        100% { left: 100%; opacity: 0; }
-      }
+      /* ---- The line ----------------------------------------------------------------- */
       .sub {
-        margin: 8px 0 0;
+        margin: 16px 0 0;
         color: var(--muted);
         font-size: 12.5px;
         letter-spacing: 0.01em;
-        animation: fadein 0.5s ease 3.1s both;
       }
-      @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after { animation: none !important; transition: none !important; }
-        .welcome { clip-path: none; }
-        .nib, .cursor, .g.l3, .gaps { display: none; }
-        .cheek { opacity: 1; }
-        .g { stroke-dashoffset: 0; }
-        .g.title { d: path("M 44 24 Q 44 29.5 44 35"); stroke-width: 6px; }
-        .g.l1 { d: path("M 76 24 Q 76 29.5 76 35"); stroke-width: 6px; }
-        .g.l2 { d: path("M 40 50 Q 60 66 80 50"); stroke-width: 5px; }
       }
     </style>
   </head>
@@ -285,7 +119,7 @@
           <path fill="var(--case)" d="M4 1 H33 V2 H34 V3 H35 V4 H36 V5 H37 V6 H38 V7 H39 V8 H40 V42 H4 Z" />
           <path fill="var(--case-light)" d="M4 1 H33 V2 H5 V41 H4 Z" />
           <path fill="var(--case-shade)" d="M39 8 H40 V42 H5 V41 H39 Z" />
-          <!-- the fold (rows 1-7), clear of the bezel -->
+          <!-- the fold (rows 1 to 7), clear of the bezel -->
           <path fill="var(--case-shade)" d="M33 1 H34 V2 H35 V3 H36 V4 H37 V5 H38 V6 H39 V7 H40 V8 H33 Z" />
           <path fill="var(--case-dark)" d="M33 7 H40 V8 H33 Z M33 1 H34 V8 H33 Z" />
           <!-- screen bezel, one row below the fold (the glass itself is the .screen element over it) -->
@@ -308,65 +142,21 @@
           <rect fill="#5f5c57" x="28" y="46" width="5" height="2" />
         </svg>
         <div class="screen">
-          <svg class="face" viewBox="0 0 120 80">
-            <!-- The word breaks in the note (they close before it turns into the face). -->
-            <mask id="words" maskUnits="userSpaceOnUse" x="0" y="0" width="120" height="80">
-              <rect width="120" height="80" fill="#fff" />
-              <g class="gaps" fill="#000">
-                <rect x="33" y="12" width="3" height="12" />
-                <rect x="31" y="29" width="3" height="8" /><rect x="58" y="29" width="3" height="8" /><rect x="81" y="29" width="3" height="8" />
-                <rect x="27" y="42" width="3" height="8" /><rect x="51" y="42" width="3" height="8" /><rect x="72" y="42" width="3" height="8" />
-                <rect x="40" y="55" width="3" height="8" />
-              </g>
-            </mask>
-            <!-- A note: its title and three lines, typed; then they become the face. -->
-            <g mask="url(#words)">
+          <!-- The smiley: two eyes, a smile, rosy cheeks. -->
+          <svg viewBox="0 0 120 80">
+            <g class="face">
               <g class="eyes">
-                <path class="g title" pathLength="1" />
-                <path class="g l1" pathLength="1" />
+                <path class="eye" d="M 44 24 V 35" />
+                <path class="eye" d="M 76 24 V 35" />
               </g>
-              <path class="g l2" pathLength="1" />
-              <path class="g l3" pathLength="1" />
+              <path class="smile" d="M 40 50 Q 60 66 80 50" />
             </g>
             <rect class="cheek" x="27" y="41" width="6" height="3" />
             <rect class="cheek" x="87" y="41" width="6" height="3" />
-            <rect class="cursor" x="0" y="0" width="3" height="8" />
           </svg>
-          <!--
-            Pictures that run on the screen, in this order, each for a couple of seconds,
-            then the smiley again (loading.js). Put the files in static/loading/ and replace
-            each placeholder with:
-              <figure class="slide"><img src="loading/your-picture.png" alt="" /></figure>
-            Any size: they fill the 3:2 screen (120 x 80), cropped to it. Remove every
-            figure to show only the smiley.
-          -->
-          <div class="slides">
-            <figure class="slide placeholder" style="--tint: #fff3d6">
-              <svg viewBox="0 0 13 11" aria-hidden="true">
-                <path fill="rgba(30,30,30,.55)" d="M0 0 H13 V11 H0 Z M1 1 V10 H12 V1 Z" />
-                <path fill="#f5b301" d="M8 2 H10 V4 H8 Z" />
-                <path fill="#86c25a" d="M2 9 V8 H3 V7 H4 V6 H5 V7 H6 V8 H7 V7 H8 V6 H9 V7 H10 V8 H11 V9 Z" />
-              </svg>
-              Picture 1
-            </figure>
-            <figure class="slide placeholder" style="--tint: #e3f6f1">
-              <svg viewBox="0 0 13 11" aria-hidden="true">
-                <path fill="rgba(30,30,30,.55)" d="M0 0 H13 V11 H0 Z M1 1 V10 H12 V1 Z" />
-                <path fill="#6f86ea" d="M8 2 H10 V4 H8 Z" />
-                <path fill="#ec6a3c" d="M2 9 V8 H3 V7 H4 V6 H5 V7 H6 V8 H7 V7 H8 V6 H9 V7 H10 V8 H11 V9 Z" />
-              </svg>
-              Picture 2
-            </figure>
-          </div>
         </div>
       </div>
-
-      <div class="pen">
-        <p class="welcome">Welcome to <b>Tutornote</b></p>
-        <span class="nib" aria-hidden="true"></span>
-      </div>
-      <p class="sub">Getting your notes ready…</p>
+      <p class="sub" role="status">Opening Tutornote…</p>
     </main>
-    <script src="loading.js"></script>
   </body>
 </html>

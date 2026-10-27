@@ -1,18 +1,38 @@
 import { app, Menu, type MenuItemConstructorOptions } from "electron";
 import { beginBrowserSignIn } from "./auth";
+import { BOARD_COPY, clampBoardZoom } from "./boardHost";
 import { WEBSITE_URL } from "./config";
+import { appEvents } from "./events";
 import { openExternal } from "./links";
+import {
+  boardPlaceNow,
+  closeScreenBoard,
+  closeScreenTeach,
+  rememberBoardZoom,
+  screenBoardContents,
+  screenBoardFocused,
+  screenTeachFocused,
+  toggleBoardPlace,
+} from "./screenTeach";
 import { checkForUpdates } from "./updater";
 import { activeContents, closeActiveTab, navigateTo, newTab, selectAdjacentTab } from "./windows";
 
 const isMac = process.platform === "darwin";
 
-/** The menus act on the page in the active tab, not the window's toolbar. */
-const contents = activeContents;
+/** The menus act on the page in the active tab, not the window's toolbar; and on none while the
+ *  lesson over another app has the keys (screenTeach.ts), whose ⌘R or zoom would land on a tab
+ *  the student cannot see. */
+const contents = () => (screenTeachFocused() ? undefined : activeContents());
 
+/** The page's text size; the lesson's board's while it has the keys (kept within its range, and
+ *  for later lessons: screenTeach.ts). */
 function zoom(step: number): void {
-  const wc = contents();
-  if (wc) wc.setZoomLevel(step === 0 ? 0 : wc.getZoomLevel() + step * 0.5);
+  const board = screenBoardContents();
+  const wc = board ?? contents();
+  if (!wc) return;
+  const level = step === 0 ? 0 : wc.getZoomLevel() + step * 0.5;
+  wc.setZoomLevel(board ? clampBoardZoom(level) : level);
+  if (board) rememberBoardZoom(wc.getZoomLevel());
 }
 
 function goBack(): void {
@@ -30,7 +50,14 @@ function openCurrentPageInBrowser(): void {
   openExternal(/^https?:/i.test(url) ? url : WEBSITE_URL);
 }
 
+/** The Window menu's board item says where the board is: the menu is built again when that changes. */
+let boardHooked = false;
+
 export function installMenu(): void {
+  if (!boardHooked) {
+    boardHooked = true;
+    appEvents.on("board-place-changed", () => installMenu());
+  }
   const updateItem: MenuItemConstructorOptions = {
     label: "Check for Updates…",
     click: () => void checkForUpdates(true),
@@ -62,7 +89,7 @@ export function installMenu(): void {
 
   const devTools: MenuItemConstructorOptions[] = app.isPackaged
     ? []
-    : [{ label: "Toggle Developer Tools", accelerator: "Alt+CmdOrCtrl+I", click: () => contents()?.toggleDevTools() }];
+    : [{ label: "Toggle Developer Tools", accelerator: "Alt+CmdOrCtrl+I", click: () => (screenBoardContents() ?? contents())?.toggleDevTools() }];
 
   const windowExtras: MenuItemConstructorOptions[] = isMac
     ? [{ type: "separator" }, { role: "front" }]
@@ -82,7 +109,13 @@ export function installMenu(): void {
         { type: "separator" },
         { label: "Sign In with Your Browser…", click: () => beginBrowserSignIn() },
         { type: "separator" },
-        { label: "Close Tab", accelerator: "CmdOrCtrl+W", click: () => closeActiveTab() },
+        // (in the lesson over another app, ⌘W closes that lesson, never a tab behind it; in the
+        // lesson's board window, only the board, as its red light does)
+        {
+          label: "Close Tab",
+          accelerator: "CmdOrCtrl+W",
+          click: () => (screenBoardFocused() ? closeScreenBoard() : screenTeachFocused() ? closeScreenTeach() : closeActiveTab()),
+        },
         ...(isMac ? [] : [{ role: "quit" } as MenuItemConstructorOptions]),
       ],
     },
@@ -123,6 +156,13 @@ export function installMenu(): void {
         { label: "Sticky Wall", accelerator: "CmdOrCtrl+3", click: () => navigateTo("/dashboard/stickies") },
         { label: "Calendar", accelerator: "CmdOrCtrl+4", click: () => navigateTo("/dashboard/calendar") },
         { label: "Profile", accelerator: "CmdOrCtrl+5", click: () => navigateTo("/dashboard/profile") },
+        { type: "separator" },
+        // The pick (explain.ts), kept as a fallback. ⌃⌥E is the desktop companion's now
+        // (companion.ts registers it), as is the tab bar's button.
+        {
+          label: "Explain on Screen",
+          click: () => appEvents.emit("explain-start", "app"),
+        },
       ],
     },
     {
@@ -135,6 +175,14 @@ export function installMenu(): void {
         { label: "Show Previous Tab", accelerator: "Ctrl+Shift+Tab", click: () => selectAdjacentTab(-1) },
         { label: "Next Tab", accelerator: "CmdOrCtrl+Shift+]", visible: false, click: () => selectAdjacentTab(1) },
         { label: "Previous Tab", accelerator: "CmdOrCtrl+Shift+[", visible: false, click: () => selectAdjacentTab(-1) },
+        { type: "separator" },
+        // The lesson's board (screenTeach.ts): into its own window, or into a tab here.
+        {
+          label: boardPlaceNow() === "tab" ? BOARD_COPY.popOut : BOARD_COPY.showIn,
+          accelerator: "Alt+CmdOrCtrl+B",
+          enabled: boardPlaceNow() !== null,
+          click: () => toggleBoardPlace(),
+        },
         ...windowExtras,
       ],
     },
