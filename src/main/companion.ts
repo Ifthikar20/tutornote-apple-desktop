@@ -20,6 +20,7 @@ import {
   windowIdOf,
   type Point,
 } from "./companionPlace";
+import { titleChange } from "./docIdentity";
 import { appEvents } from "./events";
 import { ensureScreenReading, screenPanelWindow } from "./explain";
 import {
@@ -31,6 +32,7 @@ import {
   ScreenReadError,
   watchEvents,
   type ScreenChanged,
+  type ScreenIdent,
   type ScreenOver,
   type ScreenPress,
   type ScreenRead,
@@ -1100,7 +1102,8 @@ function onScroll(scroll: ScreenScroll): void {
   A window settled into a new look that no wheel scroll explains (the helper leaves those out, and
   a change only in its top and bottom 12%, a reader's bars): a page turned by a key or a click,
   a scroll bar dragged. The careful read taken for a tap there is stale from now on. The lesson's
-  window: the lesson follows it (the page rereads it). Any other: the page hears it (run 0 is no
+  window: the lesson follows it (screenTeach.ts tells its page, onLessonChanged, with the companion
+  on or off). Any other: the page hears it (run 0 is no
   lesson's, so no lesson follows it; a card there stays while its tapped words are still there,
   which the page judges by the window's next glance), and the window is glanced at again, at most
   every CHANGED_GLANCE_MS (typing or a slideshow settle again and again). Just after the tap that
@@ -1112,10 +1115,7 @@ function onChanged(changed: ScreenChanged): void {
   if (!on) return;
   markReadStale(changed.window);
   const lesson = screenTeachLesson();
-  if (lesson && changed.window === lesson.window) {
-    sendToPage("screen-teach:changed", { run: lesson.run, window: changed.window });
-    return;
-  }
+  if (lesson && changed.window === lesson.window) return;
   if (held) return;
   const tapsOwn = cardTap?.window === changed.window && Date.now() - cardTap.at < TAP_SETTLE_MS;
   if (!tapsOwn) sendToPage("screen-teach:changed", { run: 0, window: changed.window });
@@ -1147,6 +1147,45 @@ function glanceAfterChange(window: number, keepCard = false): void {
     if (on && !held && hovered?.window === window && !privateWindows.has(window)) void glance(window, { keepCard: waiting.keepCard });
   }, wait);
   changedGlance.set(window, waiting);
+}
+
+/*
+  Which document a window shows, as the helper says it while a lesson watches its window ("ident",
+  screen.ts ScreenIdent: the lesson's window, its app's front window, and another app's while that
+  one is in front). A window this side knows (a glance of it, or its app from "over") whose title
+  changed in its letters (docIdentity.ts titleChange) shows another document: its glance and the
+  careful reads taken for taps there are stale (they are the document that was there), a card on
+  it goes (companion-withdraw, "another document": the page keeps one that is asking), and it is
+  glanced at again when the cursor is over it. Its title here is the new one either way, so the
+  reader rule for a double click (selectionKept, a browser's ".pdf") goes by the document there now.
+  The lesson's own window only goes stale: what the lesson does about another document there is
+  screenTeach.ts's (beginSwitch). Titles stay on this Mac and out of the log.
+*/
+function onIdent(ident: ScreenIdent): void {
+  if (!on) return;
+  const lessonWindow = screenTeachLesson()?.window ?? null;
+  const told = new Map<number, string>([[ident.window, ident.title]]);
+  if (ident.top !== null) told.set(ident.top, ident.topTitle);
+  if (ident.other) told.set(ident.other.window, ident.other.title);
+  for (const [window, title] of told) retitled(window, title, window === lessonWindow);
+}
+
+function retitled(window: number, title: string, lessonsOwn: boolean): void {
+  const info = windowApps.get(window);
+  const kept = glances.get(window);
+  const was = kept?.read.title ?? info?.title;
+  if (was === undefined || was === title) return;
+  if (info) windowApps.set(window, { ...info, title });
+  const another = titleChange(was, title, info?.app ?? kept?.read.app ?? "") === "letters";
+  if (kept) glances.set(window, { ...kept, read: { ...kept.read, title }, stale: kept.stale || another });
+  if (!another) return;
+  markReadStale(window);
+  if (lessonsOwn) return;
+  // (the card names the release it opened for: each one heard on that window is told)
+  const ids = [...releases.values()].filter((r) => r.window === window).map((r) => r.id);
+  for (const id of ids) sendToPage("screen-teach:companion-withdraw", { id, why: "another document", window });
+  console.log(`[companion] another document in window ${window}: its glance is stale${ids.length ? ", a card on it withdrawn" : ""}`);
+  if (!held && hovered?.window === window && !privateWindows.has(window)) glanceAfterChange(window);
 }
 
 // MARK: the page's requests
@@ -1263,6 +1302,8 @@ export function installCompanion(): void {
   watchEvents.on("tap", onTap);
   watchEvents.on("scroll", onScroll);
   watchEvents.on("changed", onChanged);
+  // (another document in a window it knows, while a lesson watches one)
+  watchEvents.on("ident", onIdent);
   appEvents.on("screen-teach-read", onLessonRead);
   // (a lesson restarted from a tap on its window starts from the read taken at that tap's release)
   useCarefulReads(carefulReadOf);

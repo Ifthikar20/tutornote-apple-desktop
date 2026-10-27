@@ -47,9 +47,18 @@
                                                    post nothing; wait for the student's turn
          {"cmd":"turn",…,"unlessMoved":true}       any of them: if the window has moved since
                                                    its last read, that is the turn
+         {"cmd":"turn",…,"how":"manual","still":true,"timeoutMs":1500}
+                                                   no turn: a wait for the window to be still
+                                                   (a lesson switching documents), answered as
+                                                   soon as two thumbnails in a row agree, changed
+                                                   or not ("changed": it differs from its last
+                                                   read; "still": it was still in time); the watch
+                                                   for a new look ("observe") is not kept quiet
+                                                   for it, as it is for a turn
          {"cmd":"cancel","id":2}                   give a turn up (it answers "cancelled")
-         {"cmd":"watch","window":12345}            tell the student's taps on that window, and
-                                                   which app is in front, until "unwatch"
+         {"cmd":"watch","window":12345}            tell the student's taps on that window, which
+                                                   app is in front, and which document the
+                                                   window shows ("ident"), until "unwatch"
          {"cmd":"unwatch"}
          {"cmd":"companion","on":true,"stop":[45,67],"private":["com.apple.keychainaccess"],
           "readers":["com.amazon.Lassen"]}         the companion on (or off): say which window
@@ -65,9 +74,10 @@
                                                    click on their page (judgeTap vets the look)
          {"cmd":"observe","windows":[12345,23456]} watch these (two at most) for a new look
                                                    ("changed"), the companion on or not (the
-                                                   app asks only while it is on, and for the
-                                                   lesson's window alone while it is paused);
-                                                   [] stops, as "companion" off does
+                                                   app asks for the lesson's window and the one
+                                                   under the cursor while it is on, and for the
+                                                   lesson's window alone while it is paused or
+                                                   off); [] stops, as "companion" off does
          {"cmd":"chord","on":true}                 watch for the talk chord (Control and Option
                                                    pressed on their own, in any app: "The talk
                                                    chord", polled, no permission), or stop (a
@@ -149,6 +159,20 @@
                                                    middle rows only (a change in its top and
                                                    bottom 12% alone, a reader's bars, is none)
          {"ev":"front","pid":678,"bundle":"…"}     the app in front (on watch, then on each change)
+         {"ev":"ident","window":12345,"title":"…","onScreen":true,"top":12345,"topTitle":"…",
+          "topFrame":{…},"other":{"window":23456,"pid":789,"app":"Preview","bundle":"…",
+                                  "title":"…","frame":{…}},"secure":false}
+                                                   the watched window's title and whether it is
+                                                   on the screen; "top" (null while its app is
+                                                   not in front): its app's front ordinary
+                                                   window, "topTitle" and "topFrame" its title and
+                                                   frame; "other" (only while another app is in
+                                                   front, not Tutornote, not under secure input):
+                                                   that app's front ordinary window; "secure":
+                                                   a password field somewhere has the keys. Said as the
+                                                   watch starts, then whenever any of it changes
+                                                   (looked at every IDENT_MS, and as an app comes
+                                                   to the front)
          {"ev":"scroll","dy":12.5,"dx":0,"momentum":false,"window":12345}
                                                    the student scrolled the watched window (with
                                                    the companion on, the one under the cursor):
@@ -164,10 +188,19 @@
                                                    or without a "down" before it) or "cancel" with
                                                    "why": "long" (let go between the two), or
                                                    spoiled after its "down" by "key", "mouse",
-                                                   "modifier", "voiceover", "secure", or "off" (the
-                                                   watch stopped). A chord spoiled before its
-                                                   "down" says nothing. "ms": how long it had been
-                                                   held; "keys" (for the log only): which sides
+                                                   "wheel", "modifier", "voiceover", "secure", or
+                                                   "off" (the watch stopped). A chord spoiled
+                                                   before its "down" says nothing here (the log
+                                                   says it, a line a second at most). "ms": how
+                                                   long it had been held; "keys" (for the log
+                                                   only): which sides
+         {"ev":"chord","kind":"state","on":false,"why":"voiceover"}
+                                                   whether the chord can be used at all: said as
+                                                   "chord" goes on, then on each change. Off while
+                                                   VoiceOver is on ("voiceover"), while secure
+                                                   input is (found as the keys are pressed:
+                                                   "secure"), or once the modifier keys look
+                                                   hidden from this helper ("hidden")
          {"id":1,"ev":"error","code":"…"}          no_permission, no_window, window_gone,
                                                    no_access, capture_failed, bad_command,
                                                    cancelled
@@ -963,6 +996,23 @@ struct Turn {
     let timeoutMs: Int
     /// The window moved since its last read: that is the turn, and nothing is posted.
     let unlessMoved: Bool
+    /// No turn ("manual" only): a wait for the window to be still (StillWatch), changed or not.
+    let still: Bool
+}
+
+/// Follows the thumbnails of a wait for the window to be still ("still"), one at a time: still once
+/// two in a row agree, whatever they show.
+struct StillWatch {
+    private var previous: [UInt8]
+
+    init(first: [UInt8]) {
+        previous = first
+    }
+
+    mutating func still(with now: [UInt8]) -> Bool {
+        defer { previous = now }
+        return meanDifference(previous, now) < SETTLED_BELOW
+    }
 }
 
 /// `point` when it is inside `frame`, else the frame's centre: a scroll goes to the window being
@@ -1007,6 +1057,41 @@ func turn(id: Int, _ asked: Turn) async {
 
     // The time to settle and the timeout both count from here, so they include the turn itself.
     let started = DispatchTime.now()
+    // A wait for the window to be still, not a turn (the lesson's window showing another document,
+    // or the student in another window: screenTeach.ts switchRead, before it reads it): nothing is
+    // posted, no change is waited for, and it is answered as soon as two thumbnails in a row agree
+    // (a tab still drawing its page has not), or at timeoutMs. "changed": whether the window, as
+    // last seen, differs from its last read.
+    if asked.still {
+        var still = StillWatch(first: before)
+        var last = before
+        let stillAnswer = { (settled: Bool) in
+            let changed = lastSeen(target.id).map { meanDifference($0, last) > CHANGED_ABOVE } ?? false
+            emit(["id": id, "ev": "turned", "moved": false, "changed": changed, "still": settled, "settleMs": msSince(started)])
+        }
+        repeat {
+            await sleepMs(POLL_MS)
+            if Task.isCancelled {
+                emit(["id": id, "ev": "error", "code": "cancelled"])
+                return
+            }
+            do {
+                guard let now = try await thumbnail(filter, config) else { continue }
+                last = now
+                if still.still(with: now) {
+                    stillAnswer(true)
+                    return
+                }
+            } catch {
+                if onScreenWindow(target.id) == nil {
+                    emit(["id": id, "ev": "error", "code": "window_gone"])
+                    return
+                }
+            }
+        } while msSince(started) < asked.timeoutMs
+        stillAnswer(false)
+        return
+    }
     // Moved since its last read (the student scrolled it, or turned the page themselves): when
     // the lesson asks, that move is this turn. Nothing is posted, and the window is watched from
     // how it looked at that read, until it is still.
@@ -1072,11 +1157,12 @@ func startTurn(id: Int, _ asked: Turn) {
     turnsLock.lock()
     defer { turnsLock.unlock() }
     // The companion's watch for a new look (observe) leaves the window alone meanwhile: the
-    // lesson's own turn is no page the student turned.
-    turning(asked.window, true)
+    // lesson's own turn is no page the student turned. (Not for a wait for it to be still: no turn,
+    // and a slide the student changes just after is to be seen at once.)
+    if !asked.still { turning(asked.window, true) }
     turnTasks[id] = Task {
         await turn(id: id, asked)
-        turning(asked.window, false)
+        if !asked.still { turning(asked.window, false) }
         _ = takeTurn(id)
     }
 }
@@ -1160,11 +1246,10 @@ func installWatch() {
             if dy != 0 || dx != 0 {
                 emit(["ev": "scroll", "dy": Double(-dy), "dx": Double(-dx), "momentum": !event.momentumPhase.isEmpty, "window": Int(window)])
             }
-            if companionOn {
-                // (told already: the new look it settles into is no "changed")
-                scrolled(window, at: now)
-                burst(window)
-            }
+            // (told already: the new look it settles into is no "changed". The companion off too: the
+            // lesson's window is observed for every lesson now)
+            scrolled(window, at: now)
+            burst(window)
             return
         }
         if event.type == .leftMouseDown {
@@ -1243,6 +1328,8 @@ func installWatch() {
               let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         else { return }
         emit(["ev": "front", "pid": Int(app.processIdentifier), "bundle": app.bundleIdentifier ?? ""])
+        // (which window of it is in front, at once rather than at the next tick: "ident")
+        identTick()
     }
     // Another Space (a swipe, ⌃→, a full-screen app) brings other windows under a cursor that has
     // not moved: what it is over is looked up again, or the band would stay on the last Space's.
@@ -1253,6 +1340,251 @@ func installWatch() {
             overAt(point, now: ProcessInfo.processInfo.systemUptime, force: true)
         }
     }
+}
+
+// MARK: - The lesson's window: which document
+
+/*
+  A lesson knows the window it reads by its id, and a browser's tab switch keeps the id: only the
+  window's title says another document is in it now (the founder's test, 2026-10-27: a 9 slide
+  deck opened in a new tab of the window a textbook was being taught in, and the lesson went on
+  about the textbook). Nor does the app coming back to the front say which of its windows the
+  student came back to (Preview opens each document in a window of its own). So while a window is
+  watched ("watch" until "unwatch") this looks at it every IDENT_MS: its title (kCGWindowName,
+  which Screen Recording lets the helper read) and whether it is on the screen; and, while its
+  app is the one in front, that app's front ordinary window (its first layer 0 window front to
+  back, IDENT_MIN_SIDE points or more each way, on screen): another document in a window of its
+  own, a native tab in front of the lesson's, the student's pick of another of its windows. With
+  another app in front (not Tutornote, and nothing while a password field has the keys), that
+  app's front ordinary window instead ("other"): the lesson follows the student into a reader
+  there (screenTeach.ts, APP_FOLLOW_MS). And whether secure input is on (a password field has the
+  keys, in any app): the app reads nothing of another document then, nor of a sign in it is
+  shown. It says "ident" as the watch starts, then only when any of that changed; an app coming
+  to the front is looked at at once (installWatch), not at the next tick. A title that changed has the watch for a new look ("observe") look often for a
+  moment, as a press does: the new page is said as soon as it is still.
+
+  One window list a tick (about half a millisecond), and the watched window's own entry. While a
+  lesson watches a window its talk chord is watched too, which keeps the helper out of App Nap
+  ("The talk chord"), so these ticks come on time. The titles go to the app, never to the log.
+  What is said is identLook, a function of the window list alone (--selftest: identSelfTest).
+*/
+let IDENT_MS = 150
+let IDENT_LEEWAY_MS = 30
+/// An app's front ordinary window is this many points each way at least, as windowAt's are.
+let IDENT_MIN_SIDE: CGFloat = 40
+
+/// A window "ident" names: its id, its app's process (and name, as the window server has it), its
+/// title and its frame.
+struct IdentWindow: Equatable {
+    let id: CGWindowID
+    let pid: pid_t
+    let owner: String
+    let title: String
+    let frame: CGRect
+}
+
+/// What "ident" says: the watched window's title and whether it is on the screen; its app's front
+/// ordinary window while that app is in front (`top`); another app's while that one is (`other`);
+/// and whether secure input is on (`secure`).
+struct IdentLook: Equatable {
+    let window: CGWindowID
+    let title: String
+    let onScreen: Bool
+    let top: IdentWindow?
+    let other: IdentWindow?
+    let secure: Bool
+}
+
+var identTimer: DispatchSourceTimer?
+/// What was last said, or nil: nothing since the watch began.
+var identTold: IdentLook?
+/// The watched window's process, as last listed (a window closed is listed no more).
+var identPid: pid_t?
+
+/// The front ordinary window of `pid` in `list` (the windows on screen, front to back): layer 0,
+/// seen (not see-through), on screen, IDENT_MIN_SIDE points each way at least.
+func frontWindow(of pid: pid_t, in list: [[String: Any]]) -> IdentWindow? {
+    for info in list {
+        guard (info[kCGWindowOwnerPID as String] as? pid_t) == pid,
+              let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+              let found = target(from: info),
+              found.frame.width >= IDENT_MIN_SIDE, found.frame.height >= IDENT_MIN_SIDE
+        else { continue }
+        if let alpha = info[kCGWindowAlpha as String] as? Double, alpha < 0.05 { continue }
+        if let shown = info[kCGWindowIsOnscreen as String] as? Bool, !shown { continue }
+        return IdentWindow(id: found.id, pid: found.pid, owner: found.owner, title: found.title, frame: found.frame)
+    }
+    return nil
+}
+
+/// What "ident" says of `window`: `own`, its own entry in the window server's list (nil: not listed,
+/// closed); `pid`, its process as last listed; `list`, the windows on screen front to back; `front`,
+/// the app in front; `otherTold`, whether another app's window may be said (not Tutornote's, not
+/// under secure input); `secure`, whether secure input is on.
+func identLook(window: CGWindowID, own: [String: Any]?, pid: pid_t?, list: [[String: Any]], front: pid_t?, otherTold: Bool,
+               secure: Bool = false) -> IdentLook {
+    let title = own?[kCGWindowName as String] as? String ?? ""
+    let onScreen = (own?[kCGWindowIsOnscreen as String] as? Bool) == true
+    var top: IdentWindow?
+    var other: IdentWindow?
+    if let front {
+        if let pid, front == pid {
+            top = frontWindow(of: front, in: list)
+        } else if otherTold {
+            other = frontWindow(of: front, in: list)
+        }
+    }
+    return IdentLook(window: window, title: title, onScreen: onScreen, top: top, other: other, secure: secure)
+}
+
+func frameFields(_ frame: CGRect) -> [String: Double] {
+    ["x": Double(frame.minX), "y": Double(frame.minY), "w": Double(frame.width), "h": Double(frame.height)]
+}
+
+/// An app's name and bundle id, by its process (NSRunningApplication's; --selftest gives its own).
+func runningApp(_ pid: pid_t) -> (name: String?, bundle: String?) {
+    let app = NSRunningApplication(processIdentifier: pid)
+    return (app?.localizedName, app?.bundleIdentifier)
+}
+
+/// The "ident" event for `look`; `appOf`: another app's name and bundle id.
+func identFields(_ look: IdentLook, appOf: (pid_t) -> (name: String?, bundle: String?) = runningApp) -> [String: Any] {
+    var fields: [String: Any] = [
+        "ev": "ident",
+        "window": Int(look.window),
+        "title": look.title,
+        "onScreen": look.onScreen,
+        "top": look.top.map { Int($0.id) as Any } ?? NSNull(),
+        "topTitle": look.top?.title ?? "",
+        "secure": look.secure,
+    ]
+    if let top = look.top { fields["topFrame"] = frameFields(top.frame) }
+    if let other = look.other {
+        let app = appOf(other.pid)
+        fields["other"] = [
+            "window": Int(other.id),
+            "pid": Int(other.pid),
+            "app": app.name ?? other.owner,
+            "bundle": app.bundle ?? "",
+            "title": other.title,
+            "frame": frameFields(other.frame),
+        ] as [String: Any]
+    }
+    return fields
+}
+
+/// One look at the watched window (the timer, an app come to the front, the watch starting:
+/// `force`, said whatever it is). Main thread.
+func identTick(force: Bool = false) {
+    guard let window = watched else { return }
+    let own = (CGWindowListCopyWindowInfo([.optionIncludingWindow], window) as? [[String: Any]])?
+        .first { ($0[kCGWindowNumber as String] as? CGWindowID) == window }
+    if let pid = own?[kCGWindowOwnerPID as String] as? pid_t { identPid = pid }
+    let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    let secure = secureInputOn()
+    let otherTold = front.map { $0 != identPid && !isTutornoteKept($0) && !secure } ?? false
+    let listed = front != nil && (front == identPid || otherTold)
+    let list = listed ? (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []) : []
+    let look = identLook(window: window, own: own, pid: identPid, list: list, front: front, otherTold: otherTold, secure: secure)
+    let was = identTold
+    guard force || look != was else { return }
+    identTold = look
+    emit(identFields(look))
+    // (another title: the new page is looked at often until it is still, and said then)
+    if let was, was.window == look.window, was.title != look.title { burst(window) }
+}
+
+/// The watch began (or moved to another window): said at once, then every IDENT_MS. Main thread.
+func startIdent() {
+    identTold = nil
+    identPid = nil
+    if identTimer == nil {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(IDENT_MS), repeating: .milliseconds(IDENT_MS), leeway: .milliseconds(IDENT_LEEWAY_MS))
+        timer.setEventHandler { identTick() }
+        timer.resume()
+        identTimer = timer
+    }
+    identTick(force: true)
+}
+
+func stopIdent() {
+    identTimer?.cancel()
+    identTimer = nil
+    identTold = nil
+    identPid = nil
+}
+
+/// `--selftest`: which window "ident" names, and when it says anything, on made up window lists.
+func identSelfTest(_ check: (String, Bool) -> Void) {
+    func listed(_ id: CGWindowID, pid: pid_t, _ frame: CGRect, layer: Int = 0, title: String = "", alpha: Double = 1, shown: Bool = true) -> [String: Any] {
+        [
+            kCGWindowNumber as String: NSNumber(value: id),
+            kCGWindowOwnerPID as String: NSNumber(value: pid),
+            kCGWindowOwnerName as String: "App \(pid)",
+            kCGWindowBounds as String: frame.dictionaryRepresentation,
+            kCGWindowLayer as String: NSNumber(value: layer),
+            kCGWindowName as String: title,
+            kCGWindowAlpha as String: NSNumber(value: alpha),
+            kCGWindowIsOnscreen as String: NSNumber(value: shown),
+        ]
+    }
+    let page = CGRect(x: 2, y: 44, width: 1800, height: 1125)
+    let lesson = listed(3545, pid: 50, page, title: "Alpha.pdf")
+    // Front to back: a menu bar item (layer 25), a tooltip-sized window, a see-through one, another
+    // app's window, then the lesson's app's second window and the lesson's own.
+    let list: [[String: Any]] = [
+        listed(1, pid: 50, CGRect(x: 0, y: 0, width: 300, height: 24), layer: 25),
+        listed(2, pid: 50, CGRect(x: 10, y: 10, width: 30, height: 200)),
+        listed(3, pid: 50, page, alpha: 0),
+        listed(4, pid: 60, page, title: "Bravo.pdf"),
+        listed(3546, pid: 50, CGRect(x: 40, y: 80, width: 1600, height: 1000), title: "Charlie.pdf"),
+        lesson,
+    ]
+    check("frontWindow takes an app's first ordinary window, front to back, past layers, slivers and see-through ones",
+          frontWindow(of: 50, in: list)?.id == 3546 && frontWindow(of: 60, in: list)?.id == 4 && frontWindow(of: 70, in: list) == nil)
+    check("nor one listed as off the screen", frontWindow(of: 50, in: [listed(9, pid: 50, page, shown: false), lesson])?.id == 3545)
+    let inFront = identLook(window: 3545, own: lesson, pid: 50, list: list, front: 50, otherTold: false)
+    check("the lesson's app in front: its front window is top, with its title, and no other",
+          inFront.title == "Alpha.pdf" && inFront.onScreen && inFront.top?.id == 3546 && inFront.top?.title == "Charlie.pdf" && inFront.other == nil)
+    let elsewhere = identLook(window: 3545, own: lesson, pid: 50, list: list, front: 60, otherTold: true)
+    check("another app in front: no top, and its front window is other",
+          elsewhere.top == nil && elsewhere.other?.id == 4 && elsewhere.other?.title == "Bravo.pdf")
+    check("nothing of another app's window when it may not be said (Tutornote's, secure input)",
+          identLook(window: 3545, own: lesson, pid: 50, list: list, front: 60, otherTold: false).other == nil)
+    let gone = identLook(window: 3545, own: nil, pid: 50, list: Array(list.dropLast()), front: 50, otherTold: false)
+    check("a watched window closed: no title, off the screen, its app's next window on top",
+          gone.title == "" && !gone.onScreen && gone.top?.id == 3546)
+    // Said only when it changed: the same look twice is nothing new, another title is.
+    let again = identLook(window: 3545, own: lesson, pid: 50, list: list, front: 50, otherTold: false)
+    let retitled = identLook(window: 3545, own: listed(3545, pid: 50, page, title: "Delta.pdf"), pid: 50, list: list, front: 50, otherTold: false)
+    check("the same look again is not said; another title, or another window in front, is",
+          again == inFront && retitled != inFront && elsewhere != inFront)
+    let fields = identFields(inFront)
+    check("ident says the window, its title, on screen, top and its title and frame, and no other",
+          fields["ev"] as? String == "ident" && fields["window"] as? Int == 3545 && fields["onScreen"] as? Bool == true
+            && fields["top"] as? Int == 3546 && fields["topTitle"] as? String == "Charlie.pdf"
+            && (fields["topFrame"] as? [String: Double])?["w"] == 1600 && fields["other"] == nil
+            && fields["secure"] as? Bool == false && JSONSerialization.isValidJSONObject(fields))
+    // Secure input going on or off is said too: nothing is read for another document meanwhile.
+    let secured = identLook(window: 3545, own: lesson, pid: 50, list: list, front: 50, otherTold: false, secure: true)
+    check("secure input on is said, and its change is a change",
+          secured != inFront && identFields(secured)["secure"] as? Bool == true && secured.top == inFront.top)
+    let away = identFields(identLook(window: 3545, own: nil, pid: nil, list: list, front: 60, otherTold: true)) { _ in ("Bravo", "com.example.bravo") }
+    let awayOther = away["other"] as? [String: Any]
+    check("its app behind: top is null; another app's window is other, with its app and frame",
+          away["top"] is NSNull && away["topTitle"] as? String == "" && awayOther?["window"] as? Int == 4
+            && awayOther?["app"] as? String == "Bravo" && awayOther?["bundle"] as? String == "com.example.bravo"
+            && (awayOther?["frame"] as? [String: Double])?["h"] == 1125 && JSONSerialization.isValidJSONObject(away))
+    // A wait for the window to be still: two thumbnails in a row that agree, changed or not.
+    let width = THUMB_WIDE
+    let flat = [UInt8](repeating: 250, count: width * 40)
+    var moving = flat
+    for i in 0..<(10 * width) { moving[i] = 20 }
+    var watch = StillWatch(first: flat)
+    check("a window still from the first look is still at the second", watch.still(with: flat))
+    var drawing = StillWatch(first: flat)
+    check("one still drawing is not, until two looks in a row agree", !drawing.still(with: moving) && drawing.still(with: moving))
 }
 
 // MARK: - The companion
@@ -2148,7 +2480,8 @@ func quickThumbnail(_ id: CGWindowID, frame: CGRect) async -> [UInt8]? {
 
 /*
   Watching for a new look ("observe"): the lesson's window and the one under the cursor, two at
-  most (the companion paused, the lesson's alone, with "companion" off meanwhile). A thumbnail of each every OBSERVE_IDLE_MS, and every POLL_MS for BURST_S after
+  most (the companion paused, the lesson's alone, with "companion" off meanwhile; a lesson without
+  the companion, its own). A thumbnail of each every OBSERVE_IDLE_MS, and every POLL_MS for BURST_S after
   something happens on it (a press, a tap, a scroll, the cursor coming over it), when a page
   turns. A window that differs in its middle rows (middleRows) from how it looked at its last
   read (or, never read, from the first look at it) and has stopped moving (two thumbnails in a
@@ -2547,6 +2880,7 @@ func selfTest() -> Bool {
     check("the pointing hand is the hand, and the arrow is not", isPointingHand(NSCursor.pointingHand) && !isPointingHand(NSCursor.arrow))
     textSelfTest(check)
     holdSelfTest(check)
+    identSelfTest(check)
     chordSelfTest(check)
     return ok
 }
@@ -2731,21 +3065,23 @@ func chordSelfTest(_ check: (String, Bool) -> Void) {
         let from: Double
         let to: Double
     }
-    /// The polls from 9.9 s to `until` as they would see `held`, the keys pressed or let go at `keys`
-    /// and the mouse pressed (or the wheel turned) at `mice`, with the chord off for `blocked`, played
-    /// through chordStep from `phase`: the events said, and the phase it ends in.
-    func play(_ held: [Held], keys: [Double] = [], mice: [Double] = [], blocked: String? = nil,
-              until: Double, from phase: ChordPhase = .idle) -> (events: [ChordEvent], phase: ChordPhase) {
+    /// The polls from 9.9 s (plus `offset`) to `until` as they would see `held`, the keys pressed or
+    /// let go at `keys`, a mouse button pressed at `mice` and the wheel turned at `wheels`, with the
+    /// chord off for `blocked`, played through chordStep from `phase`: the events said (the log's
+    /// "spoiled" too), and the phase it ends in.
+    func play(_ held: [Held], keys: [Double] = [], mice: [Double] = [], wheels: [Double] = [], blocked: String? = nil,
+              until: Double, from phase: ChordPhase = .idle, offset: Double = 0) -> (events: [ChordEvent], phase: ChordPhase) {
         var phase = phase
         var events: [ChordEvent] = []
         let edges = held.flatMap { [$0.from, $0.to] }
-        var now = 9.9
+        var now = 9.9 + offset
         while now < until {
             let at = now
             let down = { (key: String) in held.contains { $0.key == key && $0.from <= at && at < $0.to } }
             let last = { (times: [Double]) in times.filter { $0 <= at }.max() ?? 0 }
             let sample = ChordSample(now: at, pair: down("ctrl") && down("opt"), anyPair: down("ctrl") || down("opt"),
-                                     others: down("shift"), blocked: blocked, flagsAt: last(edges), keyAt: last(keys), mouseAt: last(mice))
+                                     others: down("shift"), blocked: blocked, flagsAt: last(edges), keyAt: last(keys),
+                                     buttonAt: last(mice), wheelAt: last(wheels))
             let (next, event) = chordStep(phase, sample)
             phase = next
             if let event { events.append(event) }
@@ -2753,8 +3089,16 @@ func chordSelfTest(_ check: (String, Bool) -> Void) {
         }
         return (events, phase)
     }
+    /// What the app hears ("spoiled" is the log's alone), and what the log says was spoiled.
     func said(_ events: [ChordEvent]) -> String {
-        events.map { event in event.why.map { "\(event.kind) \($0)" } ?? event.kind }.joined(separator: ", ")
+        events.filter { $0.kind != "spoiled" }.map { event in event.why.map { "\(event.kind) \($0)" } ?? event.kind }.joined(separator: ", ")
+    }
+    func spoiled(_ events: [ChordEvent]) -> String {
+        events.filter { $0.kind == "spoiled" }.compactMap(\.why).joined(separator: ", ")
+    }
+    /// The same presses at every phase of the polls against them (CHORD_POLL_MS of 1 ms steps).
+    func everyPhase(_ test: (Double) -> Bool) -> Bool {
+        (0..<CHORD_POLL_MS).allSatisfy { test(Double($0) / 1000) }
     }
     func ms(_ events: [ChordEvent], _ kind: String) -> Int { events.first { $0.kind == kind }?.ms ?? -1 }
 
@@ -2772,8 +3116,18 @@ func chordSelfTest(_ check: (String, Bool) -> Void) {
     // ⌃⌥M (the app's own shortcut): M goes down and up within the chord.
     let shortcut = play([Held(key: "ctrl", from: 10.0, to: 10.4), Held(key: "opt", from: 10.05, to: 10.4)], keys: [10.15, 10.22], until: 10.8)
     let lateKey = play([Held(key: "ctrl", from: 10.0, to: 10.9), Held(key: "opt", from: 10.05, to: 10.9)], keys: [10.6, 10.7], until: 11.2)
-    check("Control+Option+M is no chord: nothing before its down, a cancel (key) after it",
-          said(shortcut.events) == "" && shortcut.phase == .idle && said(lateKey.events) == "down, cancel key" && lateKey.phase == .idle)
+    check("Control+Option+M is no chord: nothing before its down (the log says why), a cancel (key) after it",
+          said(shortcut.events) == "" && spoiled(shortcut.events) == "key" && shortcut.phase == .idle
+            && said(lateKey.events) == "down, cancel key" && spoiled(lateKey.events) == "" && lateKey.phase == .idle)
+    // A quick ⌃⌥Space (the lesson's pause): Control at 10.00, Option at 10.02, Space down at 10.09,
+    // both let go at 10.10 and Space at 10.11, after them. Its let go is the last key time a poll
+    // can see, later than the release: still no tap, whichever moment the polls fall on.
+    check("a quick Control+Option+Space, Space let go after them, is no tap at any phase of the polls",
+          everyPhase { offset in
+              let roll = play([Held(key: "ctrl", from: 10.0, to: 10.1), Held(key: "opt", from: 10.02, to: 10.1)], keys: [10.09, 10.11],
+                              until: 10.6, offset: offset)
+              return said(roll.events) == "" && roll.phase == .idle
+          })
     let keyBefore = play([Held(key: "ctrl", from: 10.0, to: 10.24), Held(key: "opt", from: 10.05, to: 10.23)], keys: [9.95, 10.02], until: 10.6)
     check("a key let go before the chord began does not spoil it", said(keyBefore.events) == "tap")
     let shift = play([Held(key: "ctrl", from: 10.0, to: 10.3), Held(key: "opt", from: 10.05, to: 10.3), Held(key: "shift", from: 10.1, to: 10.25)], until: 10.7)
@@ -2784,8 +3138,24 @@ func chordSelfTest(_ check: (String, Bool) -> Void) {
             && shift.phase == .idle && shiftFirst.phase == .idle && shiftLate.phase == .idle)
     let click = play([Held(key: "ctrl", from: 10.0, to: 10.3), Held(key: "opt", from: 10.05, to: 10.3)], mice: [10.15], until: 10.7)
     let clickBefore = play([Held(key: "ctrl", from: 9.95, to: 10.3), Held(key: "opt", from: 10.05, to: 10.3)], mice: [10.0], until: 10.7)
-    check("a click (or the wheel) within the chord spoils it; one before its second key does not",
-          said(click.events) == "" && click.phase == .idle && said(clickBefore.events) == "tap")
+    check("a click within the chord spoils it; one before its second key does not",
+          said(click.events) == "" && spoiled(click.events) == "mouse" && click.phase == .idle && said(clickBefore.events) == "tap")
+    // A trackpad flicked a moment before: the glide's wheel turns every 16 ms until 11.0 s, all
+    // through a tap of 200 ms from 10.0 s (and through a hold).
+    let glide = Array(stride(from: 9.0, to: 11.0, by: 0.016))
+    check("a tap during a scroll's glide is a tap, at any phase of the polls",
+          everyPhase { offset in
+              said(play([Held(key: "ctrl", from: 10.0, to: 10.2), Held(key: "opt", from: 10.02, to: 10.2)], wheels: glide,
+                        until: 10.6, offset: offset).events) == "tap"
+          }
+            && said(play([Held(key: "ctrl", from: 10.0, to: 16.0), Held(key: "opt", from: 10.02, to: 16.0)], wheels: glide, until: 16.5).events)
+                == "down, hold, up")
+    let wheelIn = play([Held(key: "ctrl", from: 10.0, to: 10.3), Held(key: "opt", from: 10.05, to: 10.3)], wheels: [10.2, 10.216, 10.232], until: 10.7)
+    let wheelLate = play([Held(key: "ctrl", from: 10.0, to: 11.0), Held(key: "opt", from: 10.05, to: 11.0)], wheels: [10.6, 10.616], until: 11.3)
+    let wheelBefore = play([Held(key: "ctrl", from: 10.0, to: 10.3), Held(key: "opt", from: 10.05, to: 10.3)], wheels: [9.5, 9.516], until: 10.7)
+    check("a wheel begun inside the chord (a Control scroll) spoils it; one stopped well before does not",
+          said(wheelIn.events) == "" && spoiled(wheelIn.events) == "wheel" && wheelIn.phase == .idle
+            && said(wheelLate.events) == "down, cancel wheel" && said(wheelBefore.events) == "tap")
     let long = play([Held(key: "ctrl", from: 10.0, to: 11.5), Held(key: "opt", from: 10.05, to: 11.5)], until: 12)
     check("let go between 700 ms and 5 s it is a down, then a cancel (long)", said(long.events) == "down, cancel long"
             && abs(ms(long.events, "cancel") - 1450) <= 40 && long.phase == .idle)
@@ -2828,7 +3198,16 @@ func chordSelfTest(_ check: (String, Bool) -> Void) {
   saw it). Anything else within it spoils it, and it is then no chord: another modifier joining, a
   key going down or up (Control+Option+M, Space or the arrows, the app's own shortcuts; a window
   manager's), a mouse button (a Control click) or the wheel (Control scroll zooms the screen).
-  Spoiled, it says "cancel" if it had said "down", then waits for both keys to be up. Unspoiled it
+  "Within" runs to the poll that saw the keys let go, not to the moment they were: only the last
+  key event's time is known, so a key let go just after them (Space, in a quick ⌃⌥Space) would
+  hide the key that went down inside, and the shortcut would come out a tap. That costs only a tap
+  followed within a poll by typing. The wheel is the exception: a trackpad's glide (or a Magic
+  Mouse's resting finger) keeps saying the wheel turned for a second or more after the fingers
+  left, so a chord begun while it still was (CHORD_GLIDE_S) is not spoiled by the wheel at all; one
+  begun with the wheel still, then turned within it (a Control scroll), is.
+  Spoiled, it says "cancel" if it had said "down", then waits for both keys to be up (spoiled
+  before its "down", it says nothing to the app, and the log says why: a miss leaves a trace).
+  Unspoiled it
   says "down" at CHORD_DOWN_S held (the page shows the hold's ring), "hold" once at CHORD_HOLD_S,
   and at the release "up" after a hold, "tap" when it was held CHORD_TAP_S or less, else "cancel"
   ("long": too long for a tap, let go before the hold). A key still down after a release cannot
@@ -2837,15 +3216,23 @@ func chordSelfTest(_ check: (String, Bool) -> Void) {
 
   Off while VoiceOver is on (Control and Option are its own keys: every VoiceOver command would
   be a chord) and while secure input is on (a password field has the keys, and the keys pressed
-  within the chord could not be told); the log says so once per change. ⌃⌥M, the app's own
-  shortcut, is the way in then. A key the helper posts itself (a lesson's turn) is a key like any
-  other: one within a chord spoils it, which costs nothing.
+  within the chord could not be told); the log says so once per change, and the app hears it
+  ("state": so the page names ⌃⌥M, not a chord that does nothing). ⌃⌥M, the app's own shortcut,
+  is the way in then. A key the helper posts itself (a lesson's turn) is a key like any other: one
+  within a chord spoils it, which costs nothing.
+
+  The helper is an app with no window, which macOS would put in App Nap: its timers then fire
+  late and together, far apart, and a quick tap falls between two polls. So while the chord is
+  watched it holds an activity that keeps it out of App Nap (user initiated, letting the Mac sleep
+  when idle; not "latency critical", which is for audio and would cost more for hours on end) and
+  the timer is a strict one; the log says once if two polls ever come more than CHORD_GAP_S apart.
 
   The steps are chordStep, a pure function of what one poll saw (--selftest plays made up presses
   through it). Whether a helper with no Input Monitoring sees the modifier keys at all is not
   documented (a menu bar app reads them the same way, and the timings were seen to be readable):
-  the log says once if they look hidden (three modifier changes, none of them seen held), and
-  once when the first chord is seen. `--chordtest` shows the founder what the polls see.
+  the log says once if they look hidden (three modifier changes, none of them seen held; the app
+  hears it as a "state", and again should one be seen held after all), and once when the first
+  chord is seen. `--chordtest` shows the founder what the polls see.
 */
 
 /// The keys are looked at this often while the chord is watched (the timer may fire up to
@@ -2858,6 +3245,13 @@ let CHORD_TAP_S = 0.7
 let CHORD_HOLD_S = 5.0
 /// A chord's beginning is the last modifier change, at most this long before the poll that saw it.
 let CHORD_START_BACK_S = 0.1
+/// The wheel turned this soon before a chord began (or since): a glide under way, which the wheel
+/// does not spoil (seconds).
+let CHORD_GLIDE_S = 0.15
+/// Two polls further apart than this (seconds) mean the timer is held back: said once in the log.
+let CHORD_GAP_S = 0.15
+/// A chord spoiled before its "down" is said in the log at most this often (seconds).
+let CHORD_SPOILED_EVERY_S = 1.0
 let CHORD_PAIR: CGEventFlags = [.maskControl, .maskAlternate]
 /// The modifiers that make it another shortcut. Caps Lock, the keypad's and Help's flags are none.
 let CHORD_OTHERS: CGEventFlags = [.maskShift, .maskCommand, .maskSecondaryFn]
@@ -2869,8 +3263,9 @@ let CHORD_TEST_EVERY_MS = 50
 
 enum ChordPhase: Equatable {
     case idle
-    /// Both keys down since `start` (seconds of uptime); whether "down" and "hold" were said.
-    case held(start: Double, told: Bool, holdTold: Bool)
+    /// Both keys down since `start` (seconds of uptime); whether "down" and "hold" were said; and
+    /// whether it began in a glide of the wheel (CHORD_GLIDE_S), which then never spoils it.
+    case held(start: Double, told: Bool, holdTold: Bool, glide: Bool)
     /// Spoiled, over, or held from before: nothing until both keys and any other modifier are up.
     case waitRelease
 }
@@ -2884,13 +3279,16 @@ struct ChordSample {
     let others: Bool
     /// Why the chord is off now ("voiceover", "secure"), or nil.
     let blocked: String?
-    /// The last modifier change; the last key down or up; the last mouse press or wheel turn.
+    /// The last modifier change; the last key down or up; the last mouse button pressed (left,
+    /// right or other); the last turn of the wheel (a glide's too).
     let flagsAt: Double
     let keyAt: Double
-    let mouseAt: Double
+    let buttonAt: Double
+    let wheelAt: Double
 }
 
-/// What the chord says ("chord"): its kind, how long it had been held, and why a cancel.
+/// What the chord says ("chord"): its kind, how long it had been held, and why a cancel. And one
+/// the app never hears: "spoiled", a chord spoiled before its "down" (why), for the log alone.
 struct ChordEvent: Equatable {
     let kind: String
     let ms: Int
@@ -2907,17 +3305,22 @@ func chordStep(_ phase: ChordPhase, _ s: ChordSample) -> (ChordPhase, ChordEvent
         // (another modifier with them, or the chord off: not this time, and not until all are up)
         if s.others || s.blocked != nil { return (.waitRelease, nil) }
         let start = min(s.now, max(s.flagsAt, s.now - CHORD_START_BACK_S))
+        // (the wheel turning as it began, or since: a glide still going, not the student's scroll)
+        let glide = s.wheelAt > start - CHORD_GLIDE_S
         // (anything already within it, since the second key went down, is looked at at once)
-        return chordStep(.held(start: start, told: false, holdTold: false), s)
-    case let .held(start, told, holdTold):
+        return chordStep(.held(start: start, told: false, holdTold: false, glide: glide), s)
+    case let .held(start, told, holdTold, glide):
         // Held until now, or let go at the last modifier change.
         let end = s.pair ? s.now : min(s.now, max(start, s.flagsAt))
         let held = end - start
         let ms = Int((held * 1000).rounded())
-        let within = { (at: Double) in at > start && at <= end }
-        let spoiled: String? = s.blocked ?? (s.others ? "modifier" : within(s.keyAt) ? "key" : within(s.mouseAt) ? "mouse" : nil)
+        // (up to this poll, not to the release: a key let go after the keys must not hide one
+        // pressed within them, as the latest key time alone would)
+        let within = { (at: Double) in at > start && at <= s.now }
+        let spoiled: String? = s.blocked ?? (s.others ? "modifier" : within(s.keyAt) ? "key" : within(s.buttonAt) ? "mouse"
+            : !glide && within(s.wheelAt) ? "wheel" : nil)
         if let why = spoiled {
-            return (.waitRelease, told ? ChordEvent(kind: "cancel", ms: ms, why: why) : nil)
+            return (.waitRelease, ChordEvent(kind: told ? "cancel" : "spoiled", ms: ms, why: why))
         }
         if !s.pair {
             let next: ChordPhase = s.anyPair ? .waitRelease : .idle
@@ -2926,10 +3329,10 @@ func chordStep(_ phase: ChordPhase, _ s: ChordSample) -> (ChordPhase, ChordEvent
             return (next, told ? ChordEvent(kind: "cancel", ms: ms, why: "long") : nil)
         }
         if !told && held >= CHORD_DOWN_S {
-            return (.held(start: start, told: true, holdTold: false), ChordEvent(kind: "down", ms: ms, why: nil))
+            return (.held(start: start, told: true, holdTold: false, glide: glide), ChordEvent(kind: "down", ms: ms, why: nil))
         }
         if told && !holdTold && held >= CHORD_HOLD_S {
-            return (.held(start: start, told: true, holdTold: true), ChordEvent(kind: "hold", ms: ms, why: nil))
+            return (.held(start: start, told: true, holdTold: true, glide: glide), ChordEvent(kind: "hold", ms: ms, why: nil))
         }
         return (phase, nil)
     }
@@ -2950,6 +3353,17 @@ var chordFlagsVisible = false
 var chordHiddenTold = false
 var chordFlagChanges = 0
 var chordLastFlagsAt = 0.0
+/// What keeps the helper out of App Nap while the chord is watched (setChord), else nil.
+var chordActivity: NSObjectProtocol?
+/// When the last poll came (seconds of uptime; 0: none yet since the watch went on), and whether
+/// polls too far apart (CHORD_GAP_S) were said in the log.
+var chordLastTickAt = 0.0
+var chordGapTold = false
+/// When a chord spoiled before its "down" was last said in the log (seconds of uptime).
+var chordSpoiledToldAt = -Double.infinity
+/// What the app was last told ("state") of whether the chord can be used: "on", or why not; nil:
+/// nothing yet since the watch went on.
+var chordStateTold: String?
 
 /// When the last event of `type` came, in seconds of uptime: the later of what the session and the
 /// keyboard itself say (a key the system keeps for a shortcut, ⌃⌥M's M, still counts).
@@ -2966,13 +3380,14 @@ func chordSample(_ flags: CGEventFlags, now: Double, timed: Bool) -> ChordSample
     let anyPair = !flags.intersection(CHORD_PAIR).isEmpty
     let others = !flags.intersection(CHORD_OTHERS).isEmpty
     guard timed else {
-        return ChordSample(now: now, pair: pair, anyPair: anyPair, others: others, blocked: nil, flagsAt: 0, keyAt: 0, mouseAt: 0)
+        return ChordSample(now: now, pair: pair, anyPair: anyPair, others: others, blocked: nil, flagsAt: 0, keyAt: 0, buttonAt: 0, wheelAt: 0)
     }
     let keyAt = max(lastEventAt(.keyDown, now: now), lastEventAt(.keyUp, now: now))
-    let mouseAt = [CGEventType.leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel].map { lastEventAt($0, now: now) }.max() ?? 0
+    let buttonAt = [CGEventType.leftMouseDown, .rightMouseDown, .otherMouseDown].map { lastEventAt($0, now: now) }.max() ?? 0
     return ChordSample(now: now, pair: pair, anyPair: anyPair, others: others,
                        blocked: voiceOverOn ? "voiceover" : secureInputOn() ? "secure" : nil,
-                       flagsAt: lastEventAt(.flagsChanged, now: now), keyAt: keyAt, mouseAt: mouseAt)
+                       flagsAt: lastEventAt(.flagsChanged, now: now), keyAt: keyAt, buttonAt: buttonAt,
+                       wheelAt: lastEventAt(.scrollWheel, now: now))
 }
 
 /// Which keys make the chord, for the app's log: "lctrl+lopt", "rctrl+ropt", from the device bits
@@ -2997,16 +3412,45 @@ func noteChordOff(_ why: String?) {
     case "secure": log("[screen] chord: off while secure input is on (a password field has the keys)")
     default: log("[screen] chord: on again (\(was == "voiceover" ? "VoiceOver" : "secure input") is off)")
     }
+    tellChordState()
+}
+
+/// Whether the chord can be used now, as the app is told: "on", or why not ("voiceover", "secure",
+/// "hidden"). Main thread.
+func chordStateNow() -> String {
+    if voiceOverOn { return "voiceover" }
+    if chordOffTold == "secure" { return "secure" }
+    if chordHiddenTold && !chordFlagsVisible { return "hidden" }
+    return "on"
+}
+
+/// Tell the app ("state") whether the chord can be used, while it is watched: when that changed,
+/// or always (`force`: the watch just went on, for an app that knows nothing yet). So the page
+/// names ⌃⌥M, not a chord that does nothing. Main thread.
+func tellChordState(force: Bool = false) {
+    guard chordTimer != nil else { return }
+    let state = chordStateNow()
+    guard force || state != chordStateTold else { return }
+    chordStateTold = state
+    var fields: [String: Any] = ["ev": "chord", "kind": "state", "on": state == "on"]
+    if state != "on" { fields["why"] = state }
+    emit(fields)
 }
 
 /// The check that this helper sees the modifier keys at all (chordFlagsVisible), at one poll:
-/// `flagsAt` when the poll asked already. Main thread.
+/// `flagsAt` when the poll asked already. Told hidden, a modifier seen held later says otherwise
+/// (and the chord is usable again). Main thread.
 func checkChordFlags(_ flags: CGEventFlags, flagsAt known: Double?, now: Double) {
-    guard !chordFlagsVisible, !chordHiddenTold else { return }
+    guard !chordFlagsVisible else { return }
     if !flags.intersection(CHORD_ANY_MODIFIER).isEmpty {
         chordFlagsVisible = true
+        if chordHiddenTold {
+            log("[screen] chord: modifier keys seen after all")
+            tellChordState()
+        }
         return
     }
+    guard !chordHiddenTold else { return }
     // A modifier changed since the last poll, and none is held at this one.
     let flagsAt = known ?? lastEventAt(.flagsChanged, now: now)
     if flagsAt > chordLastFlagsAt + 0.01 {
@@ -3014,12 +3458,23 @@ func checkChordFlags(_ flags: CGEventFlags, flagsAt known: Double?, now: Double)
         if chordFlagChanges >= 3 {
             chordHiddenTold = true
             log("[screen] chord: modifier keys look hidden from this helper")
+            tellChordState()
         }
     }
     chordLastFlagsAt = flagsAt
 }
 
 func tellChord(_ event: ChordEvent) {
+    // (for the log alone, a line a second at most: a chord that never got as far as its "down",
+    // and why, so a miss leaves a trace; never which key)
+    if event.kind == "spoiled" {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - chordSpoiledToldAt >= CHORD_SPOILED_EVERY_S {
+            chordSpoiledToldAt = now
+            log("[screen] chord: spoiled before its down (\(event.why ?? "?"), \(event.ms) ms)")
+        }
+        return
+    }
     if !chordFirstSeen && (event.kind == "down" || event.kind == "tap") {
         chordFirstSeen = true
         log("[screen] chord: first chord seen")
@@ -3033,6 +3488,12 @@ func tellChord(_ event: ChordEvent) {
 /// One poll of the watch (the timer, on the main queue).
 func chordTick() {
     let now = ProcessInfo.processInfo.systemUptime
+    // (held back anyway, App Nap or not: the log says so once, in numbers)
+    if chordLastTickAt > 0 && now - chordLastTickAt > CHORD_GAP_S && !chordGapTold {
+        chordGapTold = true
+        log("[screen] chord: polls \(Int(((now - chordLastTickAt) * 1000).rounded())) ms apart")
+    }
+    chordLastTickAt = now
     let flags = CGEventSource.flagsState(.combinedSessionState)
     var timed = false
     switch chordPhase {
@@ -3043,6 +3504,9 @@ func chordTick() {
     let sample = chordSample(flags, now: now, timed: timed)
     checkChordFlags(flags, flagsAt: timed ? sample.flagsAt : nil, now: now)
     if timed { noteChordOff(sample.blocked) }
+    // (off for secure input, found as the keys were pressed: on again as soon as it ends, not only
+    // at the next press, so the page names the chord again; the cheap check alone, between presses)
+    else if chordOffTold == "secure" && !IsSecureEventInputEnabled() { noteChordOff(nil) }
     if sample.pair { chordKeys = chordKeyNames(flags) }
     let (next, event) = chordStep(chordPhase, sample)
     chordPhase = next
@@ -3058,6 +3522,7 @@ func voiceOverChanged(_ on: Bool) {
     } else if chordOffTold == "voiceover" {
         noteChordOff(nil)
     }
+    tellChordState()
 }
 
 /// The chord watched (the app's talk key is on) or not. Main thread.
@@ -3065,7 +3530,12 @@ func setChord(_ on: Bool) {
     guard on else {
         chordTimer?.cancel()
         chordTimer = nil
-        if case let .held(start, told, _) = chordPhase, told {
+        if let activity = chordActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            chordActivity = nil
+        }
+        chordStateTold = nil
+        if case let .held(start, told, _, _) = chordPhase, told {
             tellChord(ChordEvent(kind: "cancel", ms: Int(((ProcessInfo.processInfo.systemUptime - start) * 1000).rounded()), why: "off"))
         }
         chordPhase = .idle
@@ -3085,11 +3555,18 @@ func setChord(_ on: Bool) {
     let flags = CGEventSource.flagsState(.combinedSessionState)
     chordPhase = flags.intersection(CHORD_PAIR.union(CHORD_OTHERS)).isEmpty ? .idle : .waitRelease
     if !chordFlagsVisible && !chordHiddenTold { chordLastFlagsAt = lastEventAt(.flagsChanged, now: now) }
-    let timer = DispatchSource.makeTimerSource(queue: .main)
+    // (out of App Nap while watched, and a timer kept to its leeway: polls on time, so a quick tap
+    // is never missed between two)
+    chordActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                          reason: "Watching the talk chord")
+    chordLastTickAt = 0
+    let timer = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
     timer.schedule(deadline: .now(), repeating: .milliseconds(CHORD_POLL_MS), leeway: .milliseconds(CHORD_LEEWAY_MS))
     timer.setEventHandler { chordTick() }
     timer.resume()
     chordTimer = timer
+    // (the app hears at once whether the chord can be used: a helper started again knows nothing old)
+    tellChordState(force: true)
 }
 
 /*
@@ -3098,7 +3575,9 @@ func setChord(_ on: Bool) {
   held), how long ago the last modifier change, key and mouse press were, VoiceOver and secure
   input, the chord's phase, and what the watch would say. No window, no prompt, no app: it reads
   what the polls read and nothing else. (From Terminal it runs as Terminal does: were Terminal
-  allowed Input Monitoring, the flags it shows would prove less for the helper in the app.)
+  allowed Input Monitoring, the flags it shows would prove less for the helper in the app. Nor does
+  it run the app's timer: it is a plain loop, before the helper becomes an app, so App Nap and a
+  late timer cannot show here; the app's log says "polls N ms apart" for those.)
 */
 func chordTest() {
     setvbuf(stdout, nil, _IOLBF, 0)
@@ -3120,13 +3599,14 @@ func chordTest() {
         let state: String
         switch phase {
         case .idle: state = "idle"
-        case let .held(start, _, _): state = "held \(String(format: "%.2f", now - start)) s"
+        case let .held(start, _, _, _): state = "held \(String(format: "%.2f", now - start)) s"
         case .waitRelease: state = "wait for release"
         }
         phase = next
         var line = String(format: "%6.2f", now - began)
             + "  flags 0x" + String(flags.rawValue, radix: 16) + " " + (held.isEmpty ? "-" : held.joined(separator: " "))
-            + "  since: modifier \(since(sample.flagsAt, now)) s, key \(since(sample.keyAt, now)) s, mouse \(since(sample.mouseAt, now)) s"
+            + "  since: modifier \(since(sample.flagsAt, now)) s, key \(since(sample.keyAt, now)) s, mouse \(since(sample.buttonAt, now)) s"
+            + ", wheel \(since(sample.wheelAt, now)) s"
             + "  voiceover \(voiceOverOn ? "on" : "off"), secure input \(secureInputOn() ? "on" : "off")"
             + "  \(state)"
         if let event {
@@ -3212,7 +3692,8 @@ func handle(_ line: String) {
             count: min(max((message["count"] as? NSNumber)?.intValue ?? 1, 1), 50),
             at: at,
             timeoutMs: min(max((message["timeoutMs"] as? NSNumber)?.intValue ?? 4000, 100), 600_000),
-            unlessMoved: message["unlessMoved"] as? Bool ?? false
+            unlessMoved: message["unlessMoved"] as? Bool ?? false,
+            still: how == "manual" && (message["still"] as? Bool ?? false)
         )
         startTurn(id: id, asked)
     case "cancel":
@@ -3231,10 +3712,13 @@ func handle(_ line: String) {
         if let app = NSWorkspace.shared.frontmostApplication {
             emit(["ev": "front", "pid": Int(app.processIdentifier), "bundle": app.bundleIdentifier ?? ""])
         }
+        // (and which document the window shows, from now on: "ident")
+        startIdent()
     case "unwatch":
         watched = nil
         pressedAt = nil
         onTopAt = nil
+        stopIdent()
     case "companion":
         let stop = Set(((message["stop"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.uint32Value })
         let privateApps = Set(((message["private"] as? [Any]) ?? []).compactMap { $0 as? String })

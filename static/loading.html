@@ -12,10 +12,12 @@
         The loader: shown only when the app's first page takes longer than a second to load
         (src/main/windows.ts, launchReveal.ts), and closed the moment the window shows. So it
         reads from its first frame: the little pixel computer, shaped like Tutornote's folded
-        page, with a smiley on its screen that blinks now and then, and one line under it. The
-        whole page fades in over 150 ms, so a loader that is only just needed does not flash.
-        Everything is drawn here; nothing is fetched and nothing runs. Always light. Reduced
-        motion: all of it still.
+        page, with a smiley on its screen that blinks now and then, and one line under it. Its
+        window fades in over 150 ms, the whole of it, its white and its shadow too
+        (windows.ts fadeInSplash: a page cannot fade its own window), so a loader that is only
+        just needed does not flash. Everything is drawn here; nothing is fetched and nothing
+        runs. Always light. Reduced motion: all of it still (the window's fade, which moves
+        nothing, stays).
       */
       :root {
         color-scheme: light;
@@ -56,9 +58,7 @@
         flex-direction: column;
         align-items: center;
         text-align: center;
-        animation: fadein 0.15s ease-out both;
       }
-      @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 
       /* ---- The computer ----------------------------------------------------------- */
       /* Drawn on a 44 x 52 pixel grid, 4 screen pixels each: crisp edges, no smoothing. */

@@ -255,7 +255,7 @@ test("a double click's selection is the student's in a reader and on a PDF in a 
     assert.equal(selectionKept({ words: "select", bundle, title: "Campbell Biology" }), true, bundle);
   }
   // A PDF in a browser, by its window's title (any case, a stray space after it).
-  assert.equal(selectionKept({ words: "select", bundle: "com.google.Chrome", title: "9781260233032.pdf" }), true);
+  assert.equal(selectionKept({ words: "select", bundle: "com.google.Chrome", title: "9780000000017.pdf" }), true);
   assert.equal(selectionKept({ words: "select", bundle: "com.google.Chrome", title: "Chapter 3.PDF " }), true);
   assert.equal(selectionKept({ words: "select", bundle: "com.apple.Safari", title: "notes.pdf" }), true);
   assert.equal(selectionKept({ words: "select", bundle: "com.microsoft.edgemac.Beta", title: "notes.pdf" }), true);

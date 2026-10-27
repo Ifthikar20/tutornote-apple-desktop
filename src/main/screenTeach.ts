@@ -35,26 +35,45 @@ import {
   type Reading,
 } from "./boardHost";
 import { boardStateOf, BOARD_MIN, opaqueColor, placeBoard, textBox } from "./boardPlace";
-import { selectionKept, tapNumbers } from "./companionPlace";
+import { isBrowserApp, isPrivateApp, isReaderApp, selectionKept, tapNumbers } from "./companionPlace";
 import { APP_ORIGIN, originOf } from "./config";
+import {
+  anotherWindow,
+  bodyRows,
+  docKeyOf,
+  firstBodyPoint,
+  identVerdict,
+  sameDocument,
+  SWITCH_MIN_H,
+  SWITCH_MIN_W,
+  titleChange,
+  type IdentLesson,
+  type SwitchWhy,
+} from "./docIdentity";
 import { appEvents } from "./events";
 import { openExternal } from "./links";
 import { watchLessonAudio } from "./media";
 import {
   accessibilityAllowed,
   chordWatch,
+  observeWindows,
   readWindow,
   ScreenReadError,
   turnWindow,
   unwatchWindow,
   watchEvents,
   watchWindow,
+  type ScreenChanged,
   type ScreenChord,
+  type ScreenChordState,
+  type ScreenIdent,
+  type ScreenLine,
   type ScreenPress,
   type ScreenRead,
   type ScreenScroll,
   type ScreenTap,
   type ScreenTurn,
+  type ScreenTurned,
 } from "./screen";
 import { nativeSpeechAvailable } from "./speech";
 import { loadBoardPrefs, loadScreenBoard, saveBoardPrefs, saveScreenBoard } from "./store";
@@ -106,6 +125,13 @@ import {
   (screen-teach:aside), and the tutor goes on following the cursor. companion.ts hears of every
   accurate read of the lesson's window ("screen-teach-read"), to keep its glance of that window
   current, and that the window is gone ("screen-teach-gone").
+
+  Another document where a lesson teaches (another tab in its window, another window of its app,
+  a reader the student stays in): the lesson stops at once and a new run starts on that document
+  (beginSwitch, switchRead; APP_FOLLOW_MS says how it is noticed). The page hears it on its own
+  channel (screen-teach:switching), and says it listens there (screen-teach:hears-switching): a
+  page older than it, which would neither stop for it nor hold the new run until Play, gets no
+  switch, and its lesson goes on as before.
 */
 
 type Point = { x: number; y: number };
@@ -138,15 +164,26 @@ interface ScreenStart {
   /** The window scrolled or changed since this read was taken at the tap: the page starts from it
    *  and reads the window again once the lesson is up. */
   stale?: true;
+  /** Another document was seen where the last run was teaching (switchRead): this run is that
+   *  document's, started quietly at its first words, and plays only if the last one was playing
+   *  (the page remembers that from screen-teach:switching). Never sent to a page older than it
+   *  (pageHearsSwitching). */
+  switched?: true;
 }
 
-/** How a lesson was asked for: by the companion's card (companion.ts), or by a pick. */
+/** How a lesson was asked for: by the companion's card (companion.ts), or by a pick; or by the
+ *  lesson itself, for another document (switched). */
 export interface ScreenTeachOptions {
   choice?: ScreenChoice;
   quiet?: boolean;
   companion?: boolean;
   row?: string;
   stale?: boolean;
+  switched?: boolean;
+  /** Asked once the run's wait for the Accessibility answer is over, just before it starts: false
+   *  and it never starts (the switch that asked for it was a flick after all, or the student went
+   *  on to another app meanwhile). */
+  still?: () => boolean;
 }
 
 /** What the page is told of the companion (screen-teach:companion): on or off; the overlay's own
@@ -213,9 +250,77 @@ const SHORTCUTS: ReadonlyArray<[string, ScreenCommand]> = [
  *  Its own channel (screen-teach:talk), not a ScreenCommand: a page older than it would take an
  *  unknown command for a key. */
 const TALK_SHORTCUT = "Control+Alt+M";
-/** A chord "tap" this soon after ⌃⌥M is that key's Control and Option let go, not a tap of its
- *  own (the helper sees the M and spoils the chord itself; this is in case it ever cannot). */
+/** A chord "tap" this soon after ⌃⌥M, or after one of the lesson's own ⌃⌥ keys (SHORTCUTS: Space,
+ *  the arrows), is that key's Control and Option let go, not a tap of its own (the helper sees the
+ *  key and spoils the chord itself; this is in case it ever cannot, or a quick roll hides it). */
 const TALK_KEY_CHORD_MS = 400;
+
+/*
+  Another document (the founder, 2026-10-27: "when we detect a change of screen, we have to change
+  the way we explain ... right away"). A lesson knows the window it reads, not the document in it:
+  a browser's tab switch keeps the window, and coming back to its app said only "back to the
+  lesson". So the helper says which document the window shows (screen.ts ScreenIdent, every 150
+  ms while it is watched), and docIdentity.ts decides by its title: another title in the lesson's
+  window ("title"), another window of its app in front of it ("window"), the student staying
+  APP_FOLLOW_MS in another app on a reading window there ("app": a reader, Preview, a browser's
+  PDF; never a private app's), or, from a helper that says none of it, a tap whose verdict saw the
+  title change ("tap"). Then the lesson stops at once (beginSwitch: its page hears
+  screen-teach:switching, the board goes), the other document is read once it is still
+  (switchRead: SWITCH_SETTLE_MS at most, then an accurate read, SWITCH_RETRIES more SWITCH_RETRY_MS
+  apart while it has fewer than SWITCH_MIN_ROWS rows of its own), and a new run starts on it
+  quietly, at its first words (openScreenTeach, switched), playing if the last one was (the page
+  decides). The same look again after all (a title that changed by itself) is the same document:
+  the lesson goes on (cancelSwitch), as it does for a flick (another tab and straight back). A
+  title changed in its digits alone ("Lecture 3.pdf" to "Lecture 4.pdf") is looked at first, with
+  nothing stopped (checkTitle): only a look unlike the lesson's starts a switch. A document with
+  none of the page's own rows yet (a page still coming: a browser's bars alone) is read again
+  every SWITCH_EMPTY_RETRY_MS until SWITCH_EMPTY_GIVE_UP_MS after it was seen; one that shows no
+  words at all then ends the lesson. Nothing starts behind the student's back (waitSwitch): a
+  browser's page with too little of its own to teach (a page still blank, a new tab, a search
+  page: under SWITCH_MIN_WORDS words, but for a document's page, a PDF or one DOCUMENT_TITLE
+  names, whose title slide may say five words), the student gone on to another app (or to their
+  notes in Tutornote) while it was read, secure input on (a password field has the keys: nothing
+  is read then), or the lesson's own window gone off the screen showing another tab, leave the
+  lesson stopped, waiting (the page hears what for), and the other document is read again as that
+  changes: a new title, a new look or a scroll there for words. Waiting, it goes where the student
+  goes on to in the lesson's app (another of its windows, or the lesson's own showing another
+  tab: retargetSwitch). Titles are the screen's words: the log says why and counts, never one.
+*/
+const APP_FOLLOW_MS = 1_500;
+const SWITCH_SETTLE_MS = 1_500;
+const SWITCH_RETRY_MS = 300;
+const SWITCH_RETRIES = 2;
+const SWITCH_MIN_ROWS = 3;
+const SWITCH_EMPTY_RETRY_MS = 1_000;
+const SWITCH_EMPTY_GIVE_UP_MS = 8_000;
+const SWITCH_MIN_WORDS = 25;
+/** A switch waiting for words reads again once the student's scroll there has stopped this long. */
+const SWITCH_SCROLL_MS = 400;
+/** A browser's page that is a document whatever it says: a file by its extension, or a page of a
+ *  slides or documents app by the name its title carries. Matched, never logged. */
+const DOCUMENT_TITLE = /\.(pdf|pptx?|key|docx?|xlsx?|od[pts]|epub)\b|\b(google (slides|docs|sheets)|powerpoint|keynote|word|excel|canva|prezi)\b/i;
+/** The other titles a lesson keeps as its document's own (Lesson.titles), the latest. */
+const OWN_TITLES = 8;
+
+/** Another document seen (beginSwitch) and being read (switchRead): when it was seen (Date.now()),
+ *  why, and the window to read, with its app's process and name. Left waiting with nothing
+ *  started (waitSwitch): the other window's title then (`waiting`, which docIdentity.ts
+ *  identVerdict reads again by), and what it waits for: words of the page's own, the student back
+ *  in that app, secure input off, or the lesson's own window back on the screen. Taken to another
+ *  app the student stayed in (maybeFollowApp), `from`: what it was reading in the lesson's app, read
+ *  again as they come back there (onFront). Whether the lesson was playing is the page's to
+ *  remember (`play` is never kept here). */
+type Switching = {
+  at: number;
+  why: SwitchWhy;
+  target: number;
+  pid: number;
+  app: string;
+  waiting?: string;
+  waitingFor?: "words" | "student" | "secure" | "screen";
+  from?: { why: SwitchWhy; target: number };
+  play?: never;
+};
 
 interface Lesson {
   run: number;
@@ -240,14 +345,42 @@ interface Lesson {
    *  goes beside them (placeBoardFor). */
   frame: Rect;
   text: Rect | null;
-  /** Its lines (screen points), as of its latest read: a tap on none of them was on no words. */
-  lines: ReadonlyArray<Rect>;
+  /** Its lines (screen points), as of its latest read: a tap on none of them was on no words, and
+   *  a read of another document is told from the same look by them (docIdentity.ts sameLook). */
+  lines: ReadonlyArray<ScreenLine>;
   /** Its title, as of its latest read: a browser's window showing a PDF ends in ".pdf", where a
-   *  double click on a word is the student's (onTap, companionPlace.ts selectionKept). */
+   *  double click on a word is the student's (onTap, companionPlace.ts selectionKept); and what
+   *  another title in the window is told from (onIdent). */
   title: string;
+  /** The document's key, as of its latest read (docIdentity.ts docKeyOf). */
+  doc: string;
+  /** The window's latest look (screen points): its latest read, a quick one after a scroll
+   *  included (screen-teach:reread fast), which `lines` leaves out. Another document is told from
+   *  the same look by it as well as by `lines` (switchRead, checkTitle): after a scroll the page
+   *  followed with quick reads, `lines` is the look from before it. With its app's bundle: a
+   *  browser's own bars are no part of a look (docIdentity.ts bodyRows). */
+  look: { frame: Rect; lines: ReadonlyArray<ScreenLine>; bundle: string };
+  /** Other titles its document has shown, the latest OWN_TITLES: one that changed by itself, the
+   *  same look found under the new one (keepTitle). A title among them is the lesson's own
+   *  (docIdentity.ts identVerdict): a page whose title flashes a notice and back is not two. */
+  titles: string[];
+  /** Its app's front window as the helper last said it while that app was in front (undefined:
+   *  not said yet in this run). Another window of its app is another document as it comes to the
+   *  front, never because it was already there as the lesson began (onIdent). */
+  top?: number;
+  /** The title a quick look is being taken for (checkTitle), or null. */
+  checking: string | null;
+  /** Another document seen and being read, or null (Switching). */
+  switching: Switching | null;
+  /** When the last switch began (Date.now(), 0 before any): a read begun before then may show the
+   *  other document, even when that switch was a flick. */
+  switchedAt: number;
   /** When its last turn ended (Date.now(), 0 before any): a read of the window begun before then
    *  shows it as it was, and the helper says no new look while a lesson's own turn goes on. */
   turnedAt: number;
+  /** The turn of its own the lesson has posted ("auto"), going on, or null: a title that numbers
+   *  the pages moves with it (checkTitle). */
+  moving: Promise<unknown> | null;
 }
 
 let win: BrowserWindow | null = null;
@@ -282,9 +415,14 @@ const PRESS_TAP_MS = 2_000;
 let keysMovedAt = 0;
 const KEYS_MOVED_MS = 300;
 /** The talk key is wanted (registerTalkKey, whether macOS gave it or another app has it), and so
- *  the talk chord is watched; and when ⌃⌥M was last pressed (Date.now(), 0 never). */
+ *  the talk chord is watched; and when ⌃⌥M, or one of the lesson's other ⌃⌥ keys, was last
+ *  pressed (Date.now(), 0 never). */
 let talkKeyOn = false;
-let lastTalkKeyAt = 0;
+let lastShortcutAt = 0;
+/** Whether the talk chord can be used, as the helper last said (screen.ts ScreenChordState): not
+ *  while VoiceOver or secure input is on, or the modifier keys look hidden from it. The page is told
+ *  ("screen-teach:chord-state"), so it names ⌃⌥M then, not a chord that does nothing. */
+let chordUsable = true;
 /*
   The companion's card, in screen points, as the page last said after painting it
   (screen-teach:card-box), or null with no card up. The page asks for the clicks itself as the
@@ -320,6 +458,32 @@ const AX_KEEP_MS = 60_000;
 */
 let carefulRead: (window: number, since: number) => Promise<ScreenRead> | null = () => null;
 const TAP_READ_FRESH_MS = 2_000;
+/*
+  Another document (APP_FOLLOW_MS above): what the helper last said of the watched window (null
+  from a helper that says nothing of it, when a tap whose verdict saw the title change is how the
+  lesson hears of a tab), the app last in front (its pid, from "front"), the student's stay in
+  another app being timed (followApp), and the run a switch started with when that switch was seen
+  (its page's start is logged against it).
+*/
+let lastIdent: ScreenIdent | null = null;
+/** The run whose window the helper spoke of before its page was ready (onIdent): judged as that
+ *  page says its lesson is up (screen-teach:started), from the helper's latest word, since the
+ *  helper says nothing again until something changes. */
+let identLate: number | null = null;
+let frontPid: number | null = null;
+let appFollow: { pid: number; at: number; timer: NodeJS.Timeout } | null = null;
+let switchedRun: { run: number; at: number } | null = null;
+/** The page has said it hears of another document (screen-teach:hears-switching, as it listens on
+ *  screen-teach:switching) since it last loaded. A page older than that never stops for a switch,
+ *  nor holds a switched run until Play: no switch is begun for it (beginSwitch), and its lesson
+ *  goes on as before. */
+let pageHearsSwitching = false;
+/** A switch waiting for words whose window the student scrolls (onScroll): read again once the
+ *  scroll has stopped SWITCH_SCROLL_MS (a wheel's new look is no "changed"). */
+let switchScroll: NodeJS.Timeout | undefined;
+/** The other window a switch waiting for words has the helper watch for a new look (observeSwitch),
+ *  or null. */
+let switchObserved: number | null = null;
 
 /*
   The lesson's board in a window of its own: a real Mac window, with its own traffic lights,
@@ -516,7 +680,9 @@ function noteRead(current: Lesson, read: ScreenRead): void {
   current.frame = read.frame;
   current.text = textBox(read.lines);
   current.lines = read.lines;
+  current.look = { frame: read.frame, lines: read.lines, bundle: read.bundle };
   current.title = read.title;
+  current.doc = docKeyOf(read);
   // (whether Tutornote's window covers them may have changed: a board in its tab there, with the
   // student in the app being read, moves out beside them)
   const b = liveBoard();
@@ -837,8 +1003,9 @@ function reading(current: Lesson): Reading {
 /**
  * The one place the board is shown, hidden or moved. It is up exactly while the page has
  * something on it for this lesson, the page is running, and the lesson itself is on screen (not
- * aside while the student is in another app), but not the moment after the student closed it
- * (closeHold). Run at each change of any of those, so a show the
+ * aside while the student is in another app, nor while another document seen in its place is
+ * read: Lesson.switching), but not the moment after the student closed it (closeHold). Run at
+ * each change of any of those, so a show the
  * page sent early (before it was ready, or while aside) is kept, and happens when it can.
  * Where it goes is decided the first time it is up in a run (decide). Its own window shows and
  * hides as above; in its tab it stays through every one of those (the page shows a quiet line on
@@ -851,13 +1018,15 @@ function syncBoard(): void {
   if (!lesson || !w || !pageReady) return foldBoard(b, !lesson ? "the lesson ended" : "the lesson's page is not ready");
   const why = !w.isVisible()
     ? "the lesson is not on screen"
-    : aside
-      ? "the student is in another app"
-      : boardRun !== lesson.run || !boardWanted
-        ? "nothing on it"
-        : closeHold?.run === lesson.run
-          ? "the student has just closed it"
-          : "";
+    : lesson.switching
+      ? "another document is on screen"
+      : aside
+        ? "the student is in another app"
+        : boardRun !== lesson.run || !boardWanted
+          ? "nothing on it"
+          : closeHold?.run === lesson.run
+            ? "the student has just closed it"
+            : "";
   const up = !why;
   // Something new on it: a new drawing, or the board coming up.
   const fresh = freshDrawing || (up && !boardUp);
@@ -1355,8 +1524,9 @@ function ensureWindow(bounds: Rectangle): BrowserWindow {
     boardFull = false;
     pageReady = false;
     pageAsked = false;
-    // (the new page says itself whether it knows the board's tab)
+    // (the new page says itself whether it knows the board's tab, and another document)
     pageKnowsPlace = false;
+    pageHearsSwitching = false;
     lastPlaceSent = "";
     // A page loaded afresh (a reload) has its controls under no pointer yet: clicks go through
     // until it says otherwise. (Nor a card: the new page has none.)
@@ -1411,7 +1581,12 @@ function dropWindow(): void {
 function registerShortcuts(): void {
   for (const [accelerator, command] of SHORTCUTS) {
     if (globalShortcut.isRegistered(accelerator)) continue;
-    if (!globalShortcut.register(accelerator, () => live()?.webContents.send("screen-teach:command", command))) {
+    const pressed = (): void => {
+      // (its Control and Option let go just after are no chord tap: onChord)
+      lastShortcutAt = Date.now();
+      live()?.webContents.send("screen-teach:command", command);
+    };
+    if (!globalShortcut.register(accelerator, pressed)) {
       console.warn(`[screen-teach] ${accelerator} is taken by another app`);
     }
   }
@@ -1437,7 +1612,7 @@ function registerTalkKey(): void {
   const pressed = (): void => {
     // A tap of the mic, as a chord "tap" is (the page's tap rule); its own Control and Option let
     // go just after are no chord tap (onChord).
-    lastTalkKeyAt = Date.now();
+    lastShortcutAt = Date.now();
     console.log(`[screen-teach] talk key ${TALK_SHORTCUT}: a tap`);
     live()?.webContents.send("screen-teach:talk");
   };
@@ -1459,20 +1634,35 @@ function unregisterTalkKey(): void {
  * comes ("screen-teach:chord", {kind, ms}), which decides what it is (a tap: one question, or an
  * interrupt, or talk mode off; a hold: talk mode on; down, up, cancel: the hold's ring) and drops
  * it while the student is not with the lesson. Never dropped here for Tutornote's main window
- * having the keys: the chord is the student's, wherever they are. A "tap" just after ⌃⌥M is that
- * key's (TALK_KEY_CHORD_MS). Only its kind and time go to the page; why and which keys, to the log.
+ * having the keys: the chord is the student's, wherever they are. A "tap" just after ⌃⌥M, or one
+ * of the lesson's ⌃⌥ keys, is that key's (TALK_KEY_CHORD_MS). Only its kind and time go to the
+ * page; why and which keys, to the log.
  */
 function onChord(chord: ScreenChord): void {
   const w = live();
   if (!talkKeyOn || !w || !pageReady) return;
   const about = [chord.why, chord.keys].filter(Boolean).join(", ");
   const said = `[screen-teach] chord ${chord.kind} ${chord.ms} ms${about ? ` (${about})` : ""}`;
-  if (chord.kind === "tap" && Date.now() - lastTalkKeyAt < TALK_KEY_CHORD_MS) {
-    console.log(`${said}: dropped, ${TALK_SHORTCUT} was just pressed`);
+  if (chord.kind === "tap" && Date.now() - lastShortcutAt < TALK_KEY_CHORD_MS) {
+    console.log(`${said}: dropped, a Control+Option shortcut was just pressed`);
     return;
   }
   console.log(said);
   w.webContents.send("screen-teach:chord", { kind: chord.kind, ms: chord.ms });
+}
+
+/**
+ * Whether the talk chord can be used (screen.ts ScreenChordState), as the helper says it: kept for
+ * a page that loads later (told again at screen-teach:ready), and to the page now when it changed
+ * ("screen-teach:chord-state", {on}), so its talk key reads ⌃⌥M while the chord cannot work
+ * (VoiceOver, secure input, keys hidden from the helper). A page older than it never listens.
+ */
+function onChordState(state: ScreenChordState): void {
+  if (state.on === chordUsable) return;
+  chordUsable = state.on;
+  console.log(`[screen-teach] chord ${state.on ? "usable" : `not usable (${state.why ?? "?"}): ${TALK_SHORTCUT} is the way in`}`);
+  const w = live();
+  if (w && pageReady) w.webContents.send("screen-teach:chord-state", { on: chordUsable });
 }
 
 /**
@@ -1493,14 +1683,19 @@ export async function openScreenTeach(read: ScreenRead, click: Point, opts?: Scr
   const canTurn = kept ?? (await turningAllowed());
   if (kept !== null) void turningAllowed();
   if (run !== runs) return; // a newer pick
+  // (another document's run, asked for before that wait: not when its switch is over by now, nor
+  // with the student gone on to another app, where a run playing aloud would be behind their back)
+  if (opts?.still && !opts.still()) return;
   const w = ensureWindow(display.workArea);
   // The companion's window, moved with it (a pick made on another display while the tutor is on).
   const movedCompanion = Boolean(companion?.on && !sameBounds(companion.work, display.workArea));
   // Where macOS really put it: the boxes are made local to this.
   const b = w.getBounds();
   const mode: ScreenMode = PAGE_APPS.has(read.bundle) ? "page" : "scroll";
-  // (the last lesson's wait for the student, if any, is over)
+  // (the last lesson's wait for the student, if any, is over; and its stay in another app timed:
+  // the helper says again which app is in front as this window is watched)
   lesson?.waiting?.abort();
+  clearAppFollow();
   lesson = {
     run,
     window: read.window,
@@ -1515,7 +1710,14 @@ export async function openScreenTeach(read: ScreenRead, click: Point, opts?: Scr
     text: textBox(read.lines),
     lines: read.lines,
     title: read.title,
+    doc: docKeyOf(read),
+    look: { frame: read.frame, lines: read.lines, bundle: read.bundle },
+    titles: [],
+    checking: null,
+    switching: null,
+    switchedAt: 0,
     turnedAt: 0,
+    moving: null,
   };
   // The page and companion.ts hear where the companion's window is now, as for a move of its own
   // (once this lesson is the one on: companion.ts keeps the window on the lesson's display then).
@@ -1541,10 +1743,13 @@ export async function openScreenTeach(read: ScreenRead, click: Point, opts?: Scr
     // (the tapped row's words, and whether the read is older than the window's look now)
     ...(opts?.row ? { row: opts.row } : {}),
     ...(opts?.stale ? { stale: true } : {}),
+    // (another document, seen where the last run was teaching: switchRead)
+    ...(opts?.switched ? { switched: true } : {}),
   };
   console.log(
     `[screen-teach] run ${run}: ${read.app} (${read.bundle || "no bundle id"}), ${mode}, turning ${canTurn ? "allowed" : "not allowed"}` +
-      (pending.companion ? `, companion${pending.choice ? ` ${pending.choice}` : ""}${pending.quiet ? ", quiet" : ""}${pending.stale ? ", stale" : ""}` : ""),
+      (pending.companion ? `, companion${pending.choice ? ` ${pending.choice}` : ""}${pending.quiet ? ", quiet" : ""}${pending.stale ? ", stale" : ""}` : "") +
+      (pending.switched ? ", switched" : ""),
   );
   // (companion.ts keeps its glance of this window as read here)
   appEvents.emit("screen-teach-read", read);
@@ -1556,6 +1761,11 @@ export async function openScreenTeach(read: ScreenRead, click: Point, opts?: Scr
   boardWanted = false;
   releaseHold();
   watchWindow(read.window);
+  // The window's new looks (a page or a slide the student turned, a key, a scroll bar) reach the
+  // lesson with the companion off too (onLessonChanged): the companion watches it itself while on.
+  // (and no longer a window the last run's switch waited on: observeSwitch)
+  switchObserved = null;
+  if (!companion?.on) observeWindows([read.window]);
   registerShortcuts();
   w.webContents.setAudioMuted(false);
   liveBoard()?.contents.setAudioMuted(false);
@@ -1588,7 +1798,11 @@ function endLesson(): boolean {
   lesson = null;
   pending = null;
   aside = false;
+  clearAppFollow();
   unwatchWindow();
+  // (the companion, if on, goes on watching the window under the cursor: refreshObserve)
+  switchObserved = null;
+  if (!companion?.on) observeWindows([]);
   unregisterShortcuts();
   interactive = false;
   scrolling = 0;
@@ -1675,7 +1889,11 @@ const sameWay = (a: Way, b: Way): boolean => a.how === b.how && (a.how !== "key"
 async function turn(req: ScreenTurnRequest, waiting: AbortController | null): Promise<ScreenTurnResult> {
   const current = lesson;
   const shown = live();
-  const stale = (): boolean => !current || lesson !== current || current.run !== req.run || !live();
+  const started = Date.now();
+  // (another document seen meanwhile, or being read: what the window shows is no page of this
+  // run's, even once the switch turned out a flick; the turn already posted is never taken as one)
+  const stale = (): boolean =>
+    !current || lesson !== current || current.run !== req.run || !live() || current.switching !== null || current.switchedAt >= started;
   if (!current || !shown || stale()) return { ok: false, reason: "stale" };
   const origin = shown.getBounds();
   const base = { window: current.window, pid: current.pid, at: { x: origin.x + req.at.x, y: origin.y + req.at.y } };
@@ -1734,6 +1952,8 @@ async function turn(req: ScreenTurnRequest, waiting: AbortController | null): Pr
       }
     }
     const read = await readWindow(current.window);
+    // (not taken as the lesson's read when stale: another document's title would be its own then)
+    if (stale()) return { ok: false, reason: "stale" };
     noteRead(current, read);
     const w = live();
     if (stale() || !w) return { ok: false, reason: "stale" };
@@ -1812,6 +2032,12 @@ function onTap(tap: ScreenTap): void {
     if (companion?.on && tap.id !== undefined) {
       w.webContents.send("screen-teach:companion-withdraw", { id: tap.id, why: tap.words ?? "acted", window: tap.window });
     }
+    // The window's title changed under the tap (the student clicked another tab): another document.
+    // The helper's ident says so first, and decides by the title itself; from a helper that says
+    // nothing of the window's document, this is how the lesson hears of it.
+    if (tap.words === "title" && lastIdent?.window !== current.window) {
+      beginSwitch(current, "tap", { window: current.window, pid: current.pid, app: current.app });
+    }
     return;
   }
   if (kept) console.log(`[screen-teach] tap in ${current.app}: a lesson tap${tapNumbers(tap)} (selection in a reader: kept)`);
@@ -1843,7 +2069,13 @@ function restartAt(current: Lesson, at: Point, why: string): void {
     return taken ? taken.catch(() => readWindow(current.window)) : readWindow(current.window);
   }).then(
     (read) => {
+      // (another document seen there since it was asked, or being read: the switch's run is the
+      // one to start, on what the switch reads, and this read may show either document)
       if (lesson !== current) return;
+      if (current.switching || current.switchedAt >= asked) {
+        console.log("[screen-teach] the read after a tap left out: another document came up meanwhile");
+        return;
+      }
       // (with the companion on, quietly: no new greeting or start sound in the middle of its session)
       if (read.lines.length) void openScreenTeach(read, at, companion?.on ? { companion: true, quiet: true } : undefined);
       else console.log("[screen-teach] no words in the window: the lesson goes on");
@@ -1855,11 +2087,20 @@ function restartAt(current: Lesson, at: Point, why: string): void {
 /**
  * The student scrolling the page being read: the lesson's marks move with its words at once, as
  * over a PDF in the app (the page corrects the distance by reading the window again once the
- * scroll stops). Not while a turn of the lesson's own is posted: that move is the turn's.
+ * scroll stops). Not while a turn of the lesson's own is posted: that move is the turn's. A switch
+ * waiting for words in the window scrolled reads it again once the scroll has stopped
+ * (SWITCH_SCROLL_MS): the helper says no new look that a wheel explains.
  */
 function onScroll(scroll: ScreenScroll): void {
   const current = lesson;
   const w = live();
+  const s = current?.switching;
+  if (current && s?.waitingFor === "words" && scroll.window === s.target) {
+    clearTimeout(switchScroll);
+    switchScroll = setTimeout(() => {
+      if (current.switching === s) readAgain(current, "the student scrolled it");
+    }, SWITCH_SCROLL_MS);
+  }
   if (!current || !w || scroll.window !== current.window || aside || scrolling > 0 || !w.isVisible()) return;
   // (a sideways swipe moves no line up or down: a page it turns is seen as a new look instead)
   if (scroll.dy === 0) return;
@@ -1884,9 +2125,24 @@ function onScroll(scroll: ScreenScroll): void {
  * (it no longer hides for a lesson), and the student going to their notes there is going
  * elsewhere, while their click on the lesson's own window or its board is not. So which of its
  * windows takes the keys decides (onOwnFocus).
+ *
+ * The student staying in the other app on a reading window there is another document: the lesson
+ * follows them to it (followApp). Back in the lesson's app before a switch there has been read,
+ * it is no switch after all; but for one that was taken there from another document in the
+ * lesson's app (Switching.from, which may still be in front): that is read again (switchBack).
+ * Back in the app of a switch that waited for them (they went on elsewhere as it was read:
+ * waitSwitch), it is read again.
  */
 function onFront(pid: number): void {
+  frontPid = pid;
   if (pid !== process.pid) mainOnTop = false;
+  const current = lesson;
+  const s = current?.switching;
+  if (current && s?.why === "app" && pid === current.pid) {
+    if (s.from) switchBack(current, s.from);
+    else cancelSwitch(current, "back", "the student is back in its app");
+  } else if (current && s?.waitingFor === "student" && pid === s.pid) readAgain(current, "the student is back");
+  followApp(pid);
   if (pid === process.pid) return;
   stepAside(pid !== lesson?.pid);
 }
@@ -1947,6 +2203,474 @@ function stepAside(away: boolean): void {
     syncBoard();
     w.webContents.send("screen-teach:command", "resume");
   }
+}
+
+/*
+  Another document (APP_FOLLOW_MS, above, says the whole of it).
+*/
+
+/** A window the student reads in, in another app: a reader's (Kindle, Books, Preview), or a
+ *  browser's showing a PDF (its title ends in ".pdf", as companionPlace.ts selectionKept says). */
+const readingWindow = (bundle: string, title: string): boolean => isReaderApp(bundle) || (isBrowserApp(bundle) && /\.pdf$/i.test(title.trim()));
+
+function clearAppFollow(): void {
+  if (appFollow) clearTimeout(appFollow.timer);
+  appFollow = null;
+}
+
+/** `pid` came to the front: the student's stay there is timed when it is another app than the
+ *  lesson's (not Tutornote), and the lesson follows them once they have stayed APP_FOLLOW_MS on a
+ *  reading window there (maybeFollowApp). */
+function followApp(pid: number): void {
+  clearAppFollow();
+  const current = lesson;
+  if (!current || pid === current.pid || pid === process.pid) return;
+  appFollow = { pid, at: Date.now(), timer: setTimeout(maybeFollowApp, APP_FOLLOW_MS) };
+}
+
+/** The lesson follows the student to the reading window of the app they have stayed in for
+ *  APP_FOLLOW_MS ("app"), as the helper last said that window (ScreenIdent.other): at the stay's
+ *  end, or as they come to such a window later in the same stay. Never a private app's (nor one
+ *  under secure input, which the helper does not say), never a window that is not one to read in
+ *  (that is a step aside, as before), nor a sheet, a panel or a popup of that app over its
+ *  document (no title of its own, or smaller than a document's window: SWITCH_MIN_W by
+ *  SWITCH_MIN_H points). A switch being read is left to finish; one that waits (waitSwitch: the
+ *  student went on from it to this app) is taken there instead, and reads that window. */
+function maybeFollowApp(): void {
+  const current = lesson;
+  const f = appFollow;
+  const s = current?.switching ?? null;
+  if (!current || !f || !pageReady || (s && s.waiting === undefined) || frontPid !== f.pid || f.pid === current.pid) return;
+  // (a timer can fire a millisecond early by the clock, and no ident may come again while the
+  // student sits still there: what is left of the stay is waited out, never dropped)
+  const left = APP_FOLLOW_MS - (Date.now() - f.at);
+  if (left > 0) {
+    clearTimeout(f.timer);
+    f.timer = setTimeout(maybeFollowApp, left + 10);
+    return;
+  }
+  const other = lastIdent?.window === current.window ? lastIdent.other : null;
+  if (!other || other.pid !== f.pid || isPrivateApp(other.bundle) || !readingWindow(other.bundle, other.title)) return;
+  if (!other.title.trim() || !other.frame || other.frame.w < SWITCH_MIN_W || other.frame.h < SWITCH_MIN_H) return;
+  clearAppFollow();
+  if (s) {
+    // (the page was told of the switch as it began, and stays stopped: only where it reads moves.
+    // Back in the lesson's app, what it was reading there is read again: onFront)
+    if (s.why !== "app") s.from = { why: s.why, target: s.target };
+    s.why = "app";
+    s.target = other.window;
+    s.pid = other.pid;
+    s.app = other.app || "another app";
+    readAgain(current, `the student stayed in ${s.app}`);
+    return;
+  }
+  beginSwitch(current, "app", { window: other.window, pid: other.pid, app: other.app || "another app" });
+}
+
+/** The student is back in the lesson's app from the one a switch was taken to (maybeFollowApp),
+ *  which began in that app (`from`: another tab or window of it, perhaps still in front): that one
+ *  is read again, as at first, the page left stopped as it is (a read of the other app's window
+ *  still going is dropped: the switch is another one now). */
+function switchBack(current: Lesson, from: { why: SwitchWhy; target: number }): void {
+  const was = current.switching;
+  if (lesson !== current || !was) return;
+  const mine: Switching = { at: was.at, why: from.why, target: from.target, pid: current.pid, app: current.app };
+  current.switching = mine;
+  console.log(`[screen-teach] run ${current.run}: the student is back in its app: reading its other document again (${from.why})`);
+  live()?.webContents.send("screen-teach:switching", { run: current.run, on: true, why: "reading" });
+  observeSwitch(current);
+  readSwitch(current, mine, Date.now());
+}
+
+/** The helper's word on the lesson's window (screen.ts ScreenIdent): another document in it or in
+ *  front of it starts a switch, a title changed in its digits alone is looked at (checkTitle), the
+ *  lesson's own back again cancels a switch, and one waiting reads again at another title there,
+ *  or reads where the student went on to in the lesson's app instead (docIdentity.ts
+ *  identVerdict), or as secure input goes off or the lesson's window is back on the screen (closed
+ *  meanwhile, the lesson ends); and another app's reading window may be followed
+ *  (maybeFollowApp). Before the lesson's page is ready, nothing is acted on: it is judged once the
+ *  page's lesson is up (identLate). The front window it says is kept as the baseline of the next
+ *  (Lesson.top). */
+function onIdent(ident: ScreenIdent): void {
+  lastIdent = ident;
+  const current = lesson;
+  if (!current || ident.window !== current.window) return;
+  if (!pageReady) {
+    identLate = current.run;
+    return;
+  }
+  const before = current.top;
+  // (a popup or a sheet in front moves no baseline: a window it hid coming back is no new one)
+  if (ident.top !== null && (ident.top === current.window || anotherWindow(current, ident))) current.top = ident.top;
+  const verdict = identVerdict(identLessonOf(current, before, current.switching), ident);
+  if (verdict?.act === "cancel") cancelSwitch(current, "back", "back to its own document");
+  else if (verdict?.act === "switch") beginSwitch(current, verdict.why, { window: verdict.target, pid: current.pid, app: current.app });
+  else if (verdict?.act === "check") checkTitle(current, ident.title);
+  else if (verdict?.act === "reread") readAgain(current, "another title there");
+  else if (verdict?.act === "retarget") retargetSwitch(current, verdict.why, verdict.target);
+  if (current.switching?.waitingFor === "secure" && !ident.secure) readAgain(current, "secure input is off");
+  if (current.switching?.waitingFor === "screen") {
+    if (ident.onScreen) readAgain(current, "its window is back on the screen");
+    // (no title and off the screen: no longer listed, closed, and no other of its windows to go to)
+    else if (!ident.title) {
+      console.log(`[screen-teach] run ${current.run}: its window was closed: the lesson ends`);
+      closeScreenTeach();
+      return;
+    }
+  }
+  maybeFollowApp();
+}
+
+/** What docIdentity.ts identVerdict is to know of the lesson: `top`, its app's front window said
+ *  before, and the switch going on. */
+const identLessonOf = (current: Lesson, top: number | undefined, switching: IdentLesson["switching"]): IdentLesson => ({
+  window: current.window,
+  app: current.app,
+  title: current.title,
+  titles: current.titles,
+  frame: current.frame,
+  top,
+  switching,
+});
+
+/** Another document of the lesson's app that the helper last said the student has gone on to,
+ *  from the one the switch `mine` reads (identVerdict's "retarget", as for a switch that waits),
+ *  or null. */
+function goneOnTo(current: Lesson, mine: Switching): { why: "title" | "window"; target: number } | null {
+  if (lastIdent?.window !== current.window) return null;
+  const verdict = identVerdict(identLessonOf(current, current.top, { why: mine.why, target: mine.target, waiting: "" }), lastIdent);
+  return verdict?.act === "retarget" ? verdict : null;
+}
+
+/** The lesson's window settled into a new look (screen.ts "changed": a page or a slide the student
+ *  turned by a key or a click, a scroll bar dragged), observed for every lesson (openScreenTeach),
+ *  the companion on or off: its page follows it (screen-teach:changed). Not while another document
+ *  seen there is read: that new look is the next run's. A switch waiting for words in this window,
+ *  or in the other window it waits on (observed meanwhile: waitSwitch), a page that was still
+ *  coming or a slide stepped on by a key, reads it again. */
+function onLessonChanged(changed: ScreenChanged): void {
+  const current = lesson;
+  const w = live();
+  if (!current || !w || !pageReady) return;
+  if (current.switching) {
+    if (current.switching.waitingFor === "words" && changed.window === current.switching.target) readAgain(current, "a new look");
+    return;
+  }
+  if (changed.window !== current.window) return;
+  w.webContents.send("screen-teach:changed", { run: current.run, window: changed.window });
+}
+
+/**
+ * The lesson's window retitled in its digits alone ("Lecture 3.pdf" to "Lecture 4.pdf", or a page
+ * that numbers itself as it goes): another document or the same one is told by its look. A quick
+ * read (fast), outside the lesson's queue, with nothing stopped, the board left up and the page
+ * told nothing; a look unlike the lesson's (docIdentity.ts sameDocument against its last read and
+ * its latest look, a page still blank included) is another document, which starts a switch
+ * ("title") as a title in other letters does, and the same look keeps the lesson, which takes the
+ * title as its own (keepTitle). The lesson is taken as it was when the title changed: a read of
+ * its own that comes in meanwhile (a turn, the page's reread) may hold the other document already,
+ * its title with it. But for a turn of its own going on (Lesson.moving): a title that numbers the
+ * pages changes with it, so the look is taken once that turn has read the window, and judged
+ * against that read (a tab changed in its digits alone during the turn passes for its page then).
+ * Once per title; never while secure input is on (the ident that says it is off asks again).
+ * Logged by counts, never the title.
+ */
+function checkTitle(current: Lesson, title: string): void {
+  if (current.checking === title || lastIdent?.secure || !pageHearsSwitching) return;
+  current.checking = title;
+  const asked = Date.now();
+  const turning = current.moving;
+  const then = { title: current.title, looks: [{ frame: current.frame, lines: current.lines, bundle: current.bundle }, current.look] };
+  void (turning ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(() => readWindow(current.window, { fast: true }))
+    .then(
+      (read) => {
+        if (current.checking === title) current.checking = null;
+        if (lesson !== current || current.switching || current.switchedAt >= asked) return;
+        const was = turning ? { title: current.title, looks: [current, current.look] } : then;
+        if (titleChange(was.title, read.title, current.app) === "none") return;
+        const seen = sameDocument(was.looks, read);
+        const said = `${Math.round(seen.share * 100)}% of its ${seen.rows} rows the same`;
+        if (seen.same) {
+          console.log(`[screen-teach] run ${current.run}: the title's numbers changed, ${said}: the same document`);
+          if (current.title === was.title) {
+            current.title = read.title;
+            current.doc = docKeyOf(read);
+          }
+          keepTitle(current, was.title);
+          return;
+        }
+        console.log(`[screen-teach] run ${current.run}: the title's numbers changed, ${said}: another document`);
+        beginSwitch(current, "title", { window: current.window, pid: current.pid, app: current.app });
+      },
+      (e: unknown) => {
+        if (current.checking === title) current.checking = null;
+        console.warn(`[screen-teach] run ${current.run}: a look at the window's new title failed: ${e instanceof ScreenReadError ? e.code : (e as Error).message}`);
+      },
+    );
+}
+
+/** The lesson's document showed `was` before its title now, the same look under both: `was` is
+ *  kept among its own titles (Lesson.titles), so the title going back to it is no switch. */
+function keepTitle(current: Lesson, was: string): void {
+  if (titleChange(was, current.title, current.app) === "none" || current.titles.includes(was)) return;
+  current.titles = [...current.titles, was].slice(-OWN_TITLES);
+}
+
+/**
+ * Another document is on screen where `current` teaches (`why`), in the window `to`: once per
+ * switch. The wait for the student's own turn is given up, the page hears it at once
+ * (screen-teach:switching {run, on: true, why}: the voice, the marks, the open mic stop, and it
+ * remembers whether the lesson was playing), the board goes (syncBoard), and the other document is
+ * read (switchRead). Not for a page that has not said it hears of it (pageHearsSwitching): it
+ * would teach on over the other document, and play the other document's run at once whatever it
+ * shows. Never its title in the log: the app, why, and counts.
+ */
+function beginSwitch(current: Lesson, why: SwitchWhy, to: { window: number; pid: number; app: string }): void {
+  const w = live();
+  if (current.switching || lesson !== current || !w || !pageReady) return;
+  if (!pageHearsSwitching) {
+    console.log(`[screen-teach] run ${current.run}: another document in ${to.app} (${why}), but the lesson page does not hear of one: rebuild the renderer`);
+    return;
+  }
+  const mine: Switching = { at: Date.now(), why, target: to.window, pid: to.pid, app: to.app };
+  current.switching = mine;
+  current.switchedAt = mine.at;
+  current.waiting?.abort();
+  clearAppFollow();
+  console.log(`[screen-teach] run ${current.run}: another document in ${to.app} (${why}), reading it`);
+  w.webContents.send("screen-teach:switching", { run: current.run, on: true, why });
+  syncBoard();
+  readSwitch(current, mine, mine.at);
+}
+
+/** Read the other document of `mine` (switchRead), its wait for words counted from `since`; a read
+ *  that throws ends the switch, and the lesson goes on, as after a flick. */
+function readSwitch(current: Lesson, mine: Switching, since: number): void {
+  void switchRead(current, mine, since).catch((e: unknown) => {
+    console.warn(`[screen-teach] run ${current.run}: reading the other document failed: ${(e as Error).message}`);
+    cancelSwitch(current, "failed", "it could not be read");
+  });
+}
+
+/** The switch `mine` waits, with nothing started (`what`; `title`: the other window's then, `said`
+ *  to the log, never a title): the lesson stays stopped and its board away, as they are for the
+ *  read, and the page hears what it waits for (screen-teach:switching {run, on: true, why: "wait
+ *  words", "wait student", "wait secure" or "wait screen"}; a page that knows only one "on" per
+ *  switch takes it for the one it has). The other document is read again (readAgain) as what it
+ *  waits for comes: words of the page's own (another title there: onIdent; a new look of the
+ *  window waited on, which is watched for one meanwhile: onLessonChanged, observeSwitch; a scroll
+ *  of it: onScroll), the student back in its app (onFront), secure input off, the lesson's own
+ *  window back on the screen (onIdent). The student gone on to another document of the lesson's
+ *  app, or staying in another app on a reading window, takes it there (retargetSwitch,
+ *  maybeFollowApp): what the helper said last is judged again now, since it says nothing again
+ *  until something changes. A flick back to the lesson's own document still ends it as one
+ *  (cancelSwitch). */
+function waitSwitch(current: Lesson, mine: Switching, what: "words" | "student" | "secure" | "screen", title: string, said: string): void {
+  if (lesson !== current || current.switching !== mine) return;
+  mine.waiting = title;
+  mine.waitingFor = what;
+  console.log(`[screen-teach] run ${current.run}: ${said}: the lesson waits`);
+  live()?.webContents.send("screen-teach:switching", { run: current.run, on: true, why: `wait ${what}` });
+  observeSwitch(current);
+  if (lastIdent?.window === current.window) onIdent(lastIdent);
+  else maybeFollowApp();
+}
+
+/** The switch that waits (waitSwitch) reads the other document again (`said`: why, to the log);
+ *  the page hears it is read (screen-teach:switching {run, on: true, why: "reading"}). */
+function readAgain(current: Lesson, said: string): void {
+  const mine = current.switching;
+  if (lesson !== current || !mine || mine.waiting === undefined) return;
+  mine.waiting = undefined;
+  mine.waitingFor = undefined;
+  console.log(`[screen-teach] run ${current.run}: ${said}: reading the other document again`);
+  live()?.webContents.send("screen-teach:switching", { run: current.run, on: true, why: "reading" });
+  readSwitch(current, mine, Date.now());
+}
+
+/** The switch that waits goes where the student has gone on to in the lesson's app (docIdentity.ts
+ *  identVerdict "retarget": another document's window in front, or the lesson's own window showing
+ *  another tab), and reads it there (readAgain). */
+function retargetSwitch(current: Lesson, why: "title" | "window", target: number): void {
+  const mine = current.switching;
+  if (lesson !== current || !mine || mine.waiting === undefined) return;
+  mine.why = why;
+  mine.target = target;
+  mine.pid = current.pid;
+  mine.app = current.app;
+  readAgain(current, `another document in ${current.app} in front (${why})`);
+}
+
+/** With the companion off the helper watches the lesson's own window for a new look
+ *  (openScreenTeach); a switch waiting for words in another window has it watch that one too, so
+ *  a page drawn late there, or a slide stepped on by a key, is read (onLessonChanged). With the
+ *  companion on it watches the one under the cursor itself (companion.ts refreshObserve). */
+function observeSwitch(current: Lesson): void {
+  if (lesson !== current) return;
+  const s = current.switching;
+  const other = !companion?.on && s?.waitingFor === "words" && s.target !== current.window ? s.target : null;
+  if (other === switchObserved) return;
+  switchObserved = other;
+  if (!companion?.on) observeWindows(other === null ? [current.window] : [current.window, other]);
+}
+
+/** The switch is over without a new run (`code` to the page, `said` to the log): the lesson goes
+ *  on where it was (the page plays it on if it was playing), and its board comes back. */
+function cancelSwitch(current: Lesson, code: "back" | "same" | "failed", said: string): void {
+  if (!current.switching || lesson !== current) return;
+  current.switching = null;
+  console.log(`[screen-teach] run ${current.run}: ${said}: the lesson goes on`);
+  live()?.webContents.send("screen-teach:switching", { run: current.run, on: false, why: code });
+  observeSwitch(current);
+  syncBoard();
+}
+
+const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Read the other document of a switch (`mine`) in its window, once it is still: the helper's
+ * wait for two thumbnails in a row that agree (a wait, not a turn: the watch for a new look is not
+ * kept quiet by it, so a slide the student changes next is seen at once), SWITCH_SETTLE_MS at
+ * most; then an accurate read, again SWITCH_RETRIES times SWITCH_RETRY_MS apart while it has fewer
+ * than SWITCH_MIN_ROWS rows of the page's own, and every SWITCH_EMPTY_RETRY_MS while it has none
+ * (a browser's bars are no page: its tab strip and address row are in every read of it), until
+ * SWITCH_EMPTY_GIVE_UP_MS after `since`. Outside the lesson's queue: the wait for the student's
+ * turn there was given up, and a turn going on is stale by now. Dropped as soon as the switch is
+ * (a flick, a new run, the lesson's end). Nothing is read while secure input is on (waitSwitch).
+ * The lesson's own window with the same look again (docIdentity.ts sameDocument against its last
+ * read and its latest look) is the same document: the lesson takes the read and goes on
+ * (cancelSwitch). A browser's page with too little of its own to teach, or the student gone on to
+ * another app, waits (waitSwitch). Else a new run starts on it, quietly, at its first words
+ * (openScreenTeach, switched), unless the switch is over or the student has gone by the time it
+ * would start.
+ */
+async function switchRead(current: Lesson, mine: Switching, since: number): Promise<void> {
+  const to = { window: mine.target, pid: mine.pid };
+  const ours = (): boolean => lesson === current && current.switching === mine;
+  // (the student gone on to another app than the one read; or to Tutornote's own windows, but for
+  // the lesson's window and its board: their notes there, where the lesson has stepped aside)
+  const away = (): boolean => frontPid !== null && frontPid !== to.pid && (frontPid !== process.pid || aside);
+  const f = current.frame;
+  let still: ScreenTurned | null = null;
+  try {
+    still = await turnWindow({
+      window: to.window,
+      pid: to.pid,
+      how: "manual",
+      at: { x: f.x + f.w / 2, y: f.y + f.h / 2 },
+      timeoutMs: SWITCH_SETTLE_MS,
+      still: true,
+      // (a helper older than `still` waits for a change instead: from the look of the window's last
+      // read, which it has moved from by now, it answers as soon as it is still)
+      unlessMoved: true,
+    });
+  } catch {
+    // (a window that went is said by the read below)
+  }
+  if (!ours()) return;
+  const readOnce = async (): Promise<ScreenRead | null> => {
+    // (a password field has the keys, somewhere: what shows is not read until it is off)
+    if (lastIdent?.secure) {
+      waitSwitch(current, mine, "secure", "", "secure input is on");
+      return null;
+    }
+    try {
+      return await readWindow(to.window);
+    } catch (e) {
+      if (!ours()) return null;
+      const code = e instanceof ScreenReadError ? e.code : (e as Error).message;
+      // Another window that went (closed as soon as it came): back to the lesson's document. The
+      // lesson's own gone from the screen for now (another Space, the Dock), showing another
+      // document as it went: the lesson stays stopped, and reads it as the helper says it is back
+      // (or goes where the student went on to in its app; closed, the lesson ends: onIdent). From
+      // a helper that says nothing of the window, back to the lesson's document, as nothing would
+      // say that. Its own window unreadable otherwise: the lesson cannot go on there with what it
+      // last read, and ends.
+      const offScreen = code === "window_gone" || code === "no_window";
+      if (to.window !== current.window || (offScreen && lastIdent?.window !== current.window)) {
+        cancelSwitch(current, "failed", `the other ${to.window === current.window ? "document" : "window"} could not be read (${code})`);
+      } else if (offScreen) {
+        waitSwitch(current, mine, "screen", "", `its window is off the screen (${code})`);
+      } else {
+        console.warn(`[screen-teach] run ${current.run}: the other document could not be read (${code}): the lesson ends`);
+        closeScreenTeach();
+      }
+      return null;
+    }
+  };
+  let read = await readOnce();
+  if (!read || !ours()) return;
+  let tries = 0;
+  while (bodyRows(read).length < SWITCH_MIN_ROWS && tries < SWITCH_RETRIES) {
+    tries++;
+    await pause(SWITCH_RETRY_MS);
+    if (!ours()) return;
+    read = await readOnce();
+    if (!read || !ours()) return;
+  }
+  // (a page still coming: none of its own words yet, whatever bars are around it)
+  while (!bodyRows(read).length && Date.now() - since < SWITCH_EMPTY_GIVE_UP_MS) {
+    await pause(SWITCH_EMPTY_RETRY_MS);
+    if (!ours()) return;
+    read = await readOnce();
+    if (!read || !ours()) return;
+  }
+  const rows = bodyRows(read);
+  const words = rows.reduce((n, row) => n + row.key.split(" ").length, 0);
+  const seen = to.window === current.window ? sameDocument([current, current.look], read) : null;
+  console.log(
+    `[screen-teach] run ${current.run}: the other document read ${Date.now() - mine.at} ms after it was seen: ` +
+      `${read.lines.length} lines (${rows.length} rows, ${words} words of the page's own)${tries ? `, read ${tries + 1} times` : ""}` +
+      (still ? `, still after ${still.settleMs} ms${still.still === false ? " (not still in time)" : ""}` : "") +
+      `, text ${read.ocrMs} ms` +
+      (seen ? `, ${Math.round(seen.share * 100)}% of its rows the same as before` : ""),
+  );
+  // (the student gone on meanwhile to another document of the lesson's app: that is read instead)
+  const gone = goneOnTo(current, mine);
+  if (gone) {
+    mine.why = gone.why;
+    mine.target = gone.target;
+    mine.pid = current.pid;
+    mine.app = current.app;
+    console.log(`[screen-teach] run ${current.run}: another document in ${current.app} in front (${gone.why}): reading that one`);
+    readSwitch(current, mine, Date.now());
+    return;
+  }
+  if (!read.lines.length) {
+    console.log(`[screen-teach] run ${current.run}: no words in the other document: the lesson ends`);
+    closeScreenTeach();
+    return;
+  }
+  if (seen?.same) {
+    // (a title that changed by itself: the same document, its title the window's now, and the
+    // one it had its own still)
+    const was = current.title;
+    noteRead(current, read);
+    keepTitle(current, was);
+    appEvents.emit("screen-teach-read", read);
+    cancelSwitch(current, "same", "the same document after all");
+    return;
+  }
+  // A browser's page with nothing of its own, or too little to teach (a new tab, a search page),
+  // but for a document's (a deck's title slide may say five words): the lesson waits for
+  // something to read.
+  const documentPage = readingWindow(read.bundle, read.title) || DOCUMENT_TITLE.test(read.title);
+  if (isBrowserApp(read.bundle) && (!rows.length || (words < SWITCH_MIN_WORDS && !documentPage))) {
+    waitSwitch(current, mine, "words", read.title, `little to read in the other document (${rows.length} rows, ${words} words)`);
+    return;
+  }
+  if (away()) {
+    waitSwitch(current, mine, "student", read.title, "the student went on to another app");
+    return;
+  }
+  // (openScreenTeach takes the next run at once, before anything it waits for: its page's start is
+  // logged against when this switch was seen)
+  switchedRun = { run: runs + 1, at: mine.at };
+  await openScreenTeach(read, firstBodyPoint(read), { companion: companion?.on, quiet: true, switched: true, still: () => ours() && !away() });
+  // (not started: the student went on to another app as it was about to)
+  if (ours() && away()) waitSwitch(current, mine, "student", read.title, "the student went on to another app");
 }
 
 /*
@@ -2100,8 +2824,13 @@ export function installScreenTeach(): void {
   watchEvents.on("tap", onTap);
   watchEvents.on("scroll", onScroll);
   watchEvents.on("front", onFront);
-  // The talk chord, while the talk key is on (registerTalkKey).
+  // Which document the lesson's window shows (another one: beginSwitch), and its new looks, which
+  // its page follows (with the companion on or off).
+  watchEvents.on("ident", onIdent);
+  watchEvents.on("changed", onLessonChanged);
+  // The talk chord, while the talk key is on (registerTalkKey), and whether it can be used.
   watchEvents.on("chord", onChord);
+  watchEvents.on("chordState", onChordState);
   app.on("browser-window-focus", (_event, focused) => onOwnFocus(focused));
   // (before companion.ts's own listener: it asks pressWasThePage of the same press's tap)
   watchEvents.on("press", onPress);
@@ -2161,6 +2890,11 @@ export function installScreenTeach(): void {
     lastPlaceSent = "";
     return placeNow();
   });
+  // The page listens for another document where it teaches (its bridge's onSwitching): switches
+  // are begun for it from now on (pageHearsSwitching).
+  ipcMain.on("screen-teach:hears-switching", (event) => {
+    if (fromLesson(event)) pageHearsSwitching = true;
+  });
   // The board's own Pop out or Open in Tutornote (the student's click on it).
   ipcMain.on("screen-teach:board-move", (event, value: unknown) => {
     const to = boardMoveOf(value);
@@ -2190,6 +2924,8 @@ export function installScreenTeach(): void {
     const w = live();
     // (a page loaded afresh while the student is in another app: away, not with the lesson)
     if (lesson && aside) w?.webContents.send("screen-teach:present", false);
+    // (and whether the talk chord can be used, for a page that names its talk key)
+    w?.webContents.send("screen-teach:chord-state", { on: chordUsable });
     if ((pending || companion?.on) && w && !w.isVisible()) w.showInactive();
     syncBoard();
     // (and the companion's state again, for a page that listens before it asks)
@@ -2275,11 +3011,15 @@ export function installScreenTeach(): void {
     current.waiting?.abort();
     const waiting = req.how === "manual" ? new AbortController() : null;
     current.waiting = waiting;
-    return queued(current, () =>
-      turn(req, waiting).finally(() => {
+    return queued(current, () => {
+      const going: Promise<ScreenTurnResult> = turn(req, waiting).finally(() => {
         current.turnedAt = Date.now();
-      }),
-    ).finally(() => {
+        if (current.moving === going) current.moving = null;
+      });
+      // (the lesson's own move, posted: a title that numbers the pages changes with it, checkTitle)
+      if (req.how === "auto") current.moving = going;
+      return going;
+    }).finally(() => {
       if (current.waiting === waiting) current.waiting = null;
     });
   });
@@ -2292,9 +3032,19 @@ export function installScreenTeach(): void {
     if (!current || current.run !== run) return Promise.resolve(null);
     const fast = (typeof opts === "object" && opts !== null ? (opts as { fast?: unknown }).fast : false) === true;
     return queued(current, async () => {
+      // (another document seen there since, or being read: no read of this run's)
+      const asked = Date.now();
+      if (current.switching) return null;
       try {
         const read = await readWindow(current.window, fast ? { fast: true } : undefined);
+        if (current.switching || current.switchedAt >= asked) return null;
         if (!fast) noteRead(current, read);
+        // (a quick one is the window's latest look all the same: another document is told by it.
+        // Not one taken as another title came up, before the helper said so: that look is the
+        // other document's, and would pass it for the lesson's own)
+        else if (lesson === current && ["none", "weak"].includes(titleChange(current.title, read.title, current.app))) {
+          current.look = { frame: read.frame, lines: read.lines, bundle: read.bundle };
+        }
         const w = live();
         if (lesson === current && w && !fast) appEvents.emit("screen-teach-read", read);
         return lesson === current && w ? toLocal(read, w.getBounds()) : null;
@@ -2315,7 +3065,19 @@ export function installScreenTeach(): void {
   });
 
   ipcMain.on("screen-teach:started", (event) => {
-    if (fromLesson(event) && lesson) appEvents.emit("screen-teach-started");
+    if (!fromLesson(event) || !lesson) return;
+    appEvents.emit("screen-teach-started");
+    // (a run started for another document: how long after it was seen the new lesson is up)
+    if (switchedRun?.run === lesson.run) {
+      console.log(`[screen-teach] run ${lesson.run} ready ${Date.now() - switchedRun.at} ms after the switch was seen`);
+      switchedRun = null;
+    }
+    // (the helper spoke of the window before the page was ready, and says nothing again until
+    // something changes: what it last said is judged now, against the read the run started on)
+    if (identLate === lesson.run) {
+      identLate = null;
+      if (lastIdent?.window === lesson.window) onIdent(lastIdent);
+    }
   });
 
   ipcMain.on("screen-teach:interactive", (event, on: unknown) => {

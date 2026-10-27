@@ -128,7 +128,8 @@ function listen(channel: string, cb: unknown): () => void {
 const screenTeachBridge = Object.freeze({
   /** The page is mounted: the start it is to run, or null. */
   ready: (): Promise<unknown> => ipcRenderer.invoke("screen-teach:ready"),
-  /** A new pick while the page is open. Returns the way to stop listening. */
+  /** A new pick while the page is open. Returns the way to stop listening. Its `switched` (another
+   *  document where the last run was teaching) comes as the Mac app sends it. */
   onStart: (cb: unknown): (() => void) => listen("screen-teach:start", cb),
   started: (): void => ipcRenderer.send("screen-teach:started"),
   interactive: (on: unknown): void => ipcRenderer.send("screen-teach:interactive", on === true),
@@ -197,6 +198,25 @@ const screenTeachBridge = Object.freeze({
   onWindowScroll: (cb: unknown): (() => void) => listen("screen-teach:window-scroll", cb),
   /** The lesson's window settled into a new look ({run, window}): a page the student turned. */
   onChanged: (cb: unknown): (() => void) => listen("screen-teach:changed", cb),
+  /** Another document where the lesson teaches ({run, on, why}): `on`, seen and being read (the
+   *  lesson stops at once; `why`: "title", "window", "app" or "tap"); then a start with `switched`
+   *  for it, or `on` false, the same document after all (`why`: "back", "same", "failed"), and the
+   *  lesson goes on. While it waits with nothing to read yet, `on` again with `why` "wait words",
+   *  "wait student", "wait secure" or "wait screen", and "reading" as it reads again. Only a
+   *  finite run, a boolean and a short string reach the page. A channel of its own; listening on it
+   *  tells the Mac app this page hears of a switch (screen-teach:hears-switching): for a page older
+   *  than it none is begun, and its lesson goes on as it always did. */
+  onSwitching: (cb: unknown): (() => void) => {
+    if (typeof cb !== "function") return () => undefined;
+    const stop = listen("screen-teach:switching", (value: unknown) => {
+      const s = (typeof value === "object" && value !== null ? value : {}) as { run?: unknown; on?: unknown; why?: unknown };
+      if (typeof s.run !== "number" || !Number.isFinite(s.run) || typeof s.on !== "boolean") return;
+      const why = typeof s.why === "string" ? s.why.slice(0, 24) : "";
+      (cb as (switching: { run: number; on: boolean; why?: string }) => void)({ run: s.run, on: s.on, ...(why ? { why } : {}) });
+    });
+    ipcRenderer.send("screen-teach:hears-switching");
+    return stop;
+  },
   /** The student went to another app (true), or came back (false); the window stays up. */
   onAside: (cb: unknown): (() => void) => listen("screen-teach:aside", cb),
   /** Whether the student is with the lesson (false: in another app), with or without the companion,
@@ -221,6 +241,18 @@ const screenTeachBridge = Object.freeze({
           if (kind !== "down" && kind !== "tap" && kind !== "hold" && kind !== "up" && kind !== "cancel") return;
           if (typeof c.ms !== "number" || !Number.isFinite(c.ms)) return;
           (cb as (chord: { kind: string; ms: number }) => void)({ kind, ms: c.ms });
+        })
+      : () => undefined,
+  /** Whether the talk chord can be used ({on}): told as the page gets ready, then on each change.
+   *  Off while VoiceOver is on, while secure input is, or when the modifier keys look hidden from
+   *  the helper: ⌃⌥M is the way in then, and the page names that. Only a boolean reaches the page.
+   *  A channel of its own, for the same reason. */
+  onChordState: (cb: unknown): (() => void) =>
+    typeof cb === "function"
+      ? listen("screen-teach:chord-state", (value: unknown) => {
+          const on = typeof value === "object" && value !== null ? (value as { on?: unknown }).on : undefined;
+          if (typeof on !== "boolean") return;
+          (cb as (state: { on: boolean }) => void)({ on });
         })
       : () => undefined,
   /** The cursor, fed from the Mac app while the page asks for it (cursorFeed "main"). */

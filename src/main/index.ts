@@ -51,7 +51,7 @@ registerAppScheme();
 // Links the OS hands us before the window exists (a cold start from a link).
 let queuedLinks: string[] = deepLinksIn(process.argv);
 // The first main window has been made (whenReady, below). Set once, never reset: before it the
-// Dock has nothing to show, and a window made for a click then would be a second one.
+// Dock (or a second launch) has nothing to show, and a window made for it then would be a second one.
 let launched = false;
 
 // One running copy. A second launch (a double-click on the dock, a link) focuses it.
@@ -59,6 +59,12 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
+    // (before the first window is made, as the Dock's activate: focusMainWindow would make one,
+    // and the launch's own a second; its links wait with the cold start's, handled once it is)
+    if (!launched) {
+      queuedLinks.push(...deepLinksIn(argv));
+      return;
+    }
     focusMainWindow();
     for (const link of deepLinksIn(argv)) handleDeepLink(link);
   });

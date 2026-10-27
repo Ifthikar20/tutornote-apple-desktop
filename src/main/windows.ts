@@ -220,6 +220,30 @@ function createSplash(ready: () => void): BrowserWindow {
   return splash;
 }
 
+/** The loader's window fades in over this long (ms), the whole of it: its white, its shadow. */
+const SPLASH_FADE_MS = 150;
+
+/** Show the loader's window from fully clear, then step it up to opaque over SPLASH_FADE_MS (an
+ *  ease out), so a loader that is only just needed (the page loads a moment after it shows) is
+ *  barely there, never a white box popping up and away. The page cannot do this itself: its
+ *  window's white and shadow would show at once around it. The timer returned stops by itself
+ *  once opaque or the window is gone; clearing it stops it sooner. */
+function fadeInSplash(splash: BrowserWindow): NodeJS.Timeout {
+  const began = Date.now();
+  splash.setOpacity(0);
+  splash.show();
+  const timer = setInterval(() => {
+    if (splash.isDestroyed()) {
+      clearInterval(timer);
+      return;
+    }
+    const t = Math.min(1, (Date.now() - began) / SPLASH_FADE_MS);
+    splash.setOpacity(1 - (1 - t) * (1 - t));
+    if (t >= 1) clearInterval(timer);
+  }, 16);
+  return timer;
+}
+
 const hostOf = (url: string): string => {
   try {
     return new URL(url).hostname;
@@ -541,6 +565,7 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   // moment the window shows, however it is shown (launchReveal.ts, step by step).
   let launch: LaunchState = LAUNCH_START;
   let splash: BrowserWindow | null = null;
+  let splashFade: NodeJS.Timeout | undefined;
   const launchEvent = (event: LaunchEvent): void => {
     const step = launchStep(launch, event);
     // (kept before acting: showing the window raises "show", a step of its own, which finds it done)
@@ -550,9 +575,11 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
       if (action === "make-splash") {
         splash = createSplash(() => launchEvent("splash-ready"));
       } else if (action === "show-splash") {
-        if (splash && !splash.isDestroyed()) splash.show();
+        // (faded in, the whole window: fadeInSplash)
+        if (splash && !splash.isDestroyed()) splashFade = fadeInSplash(splash);
       } else if (action === "close-splash") {
         clearTimeout(splashTimer);
+        clearInterval(splashFade);
         if (splash && !splash.isDestroyed()) splash.close();
         splash = null;
       } else if (action === "show-window") {
@@ -571,8 +598,13 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   revealMain = askReveal;
   const splashTimer = setTimeout(() => launchEvent(!win.isDestroyed() && win.isVisible() ? "shown" : "delay"), SPLASH_DELAY_MS);
   const fallback = setTimeout(() => launchEvent("max"), SPLASH_MAX_MS);
-  // Shown any other way first (the Dock, a link, a lesson): the loader goes, and none comes.
-  win.on("show", () => launchEvent("shown"));
+  // Shown any other way first (the Dock, a link, a lesson): the loader goes, and none comes. And
+  // maximized as the reveal would have it, if it was saved so (the reveal's own show finds the
+  // launch revealed already, and maximizes itself).
+  win.on("show", () => {
+    if (!launch.revealed && state.maximized && !win.isMaximized()) win.maximize();
+    launchEvent("shown");
+  });
 
   const home = newPage("home", first === "signin" ? null : APP_URL);
   selectPage(home.id);
@@ -588,9 +620,14 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   }, 2000);
 
   let saveTimer: NodeJS.Timeout | undefined;
+  // Not saved before the launch reveal: the window is hidden then, and not yet maximized (that
+  // comes as it shows), so a save would lose a saved "maximized" (⌘Q over a slow start's loader).
+  // The state loaded stands until the window is up.
   const scheduleSave = (): void => {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => saveWindowState(win), 300);
+    saveTimer = setTimeout(() => {
+      if (launch.revealed) saveWindowState(win);
+    }, 300);
   };
   win.on("resize", () => {
     layout();
@@ -615,7 +652,8 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   win.on("close", (event) => {
     leaving();
     clearTimeout(saveTimer);
-    saveWindowState(win);
+    // (as scheduleSave: never from a window not yet revealed)
+    if (launch.revealed) saveWindowState(win);
     if (closingWindow) return;
     // The tabs leave their notes first, as when one is closed; then the window goes (and
     // the app quits, if that is why it is closing).
@@ -635,6 +673,7 @@ export function createMainWindow(first: FirstPage = "app"): BrowserWindow {
   win.on("closed", () => {
     clearTimeout(fallback);
     clearTimeout(splashTimer);
+    clearInterval(splashFade);
     clearInterval(titleTimer);
     clearTimeout(spareTimer);
     clearTimeout(refreshTimer);

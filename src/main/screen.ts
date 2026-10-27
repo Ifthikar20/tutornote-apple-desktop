@@ -93,15 +93,22 @@ export interface ScreenTurn {
   /** When the window no longer looks as it did at its last read (the student moved it), post
    *  nothing: that move is the turn. */
   unlessMoved?: boolean;
+  /** No turn ("manual" only): a wait for the window to be still, answered as soon as two of the
+   *  helper's thumbnails in a row agree, changed or not (a lesson switching documents reads the
+   *  window once it is: screenTeach.ts switchRead). The watch for a new look is not kept quiet
+   *  for it as for a turn. A helper older than it waits for a change instead, up to timeoutMs. */
+  still?: boolean;
 }
 
 /** What a turn came to. `moved`: the window had moved since its last read, and nothing was
- *  posted. `front`: for a key, whether the app was in front to take it (null for the rest). */
+ *  posted. `front`: for a key, whether the app was in front to take it (null for the rest).
+ *  `still`: for a wait for the window to be still, whether it was in time (null for the rest). */
 export interface ScreenTurned {
   changed: boolean;
   settleMs: number;
   moved: boolean;
   front: boolean | null;
+  still: boolean | null;
 }
 
 /**
@@ -219,6 +226,34 @@ export interface ScreenChanged {
   settleMs: number;
 }
 
+/** A window "ident" names: its id, and its title and frame (screen points). */
+export interface ScreenIdentWindow {
+  window: number;
+  title: string;
+  frame: { x: number; y: number; w: number; h: number } | null;
+}
+
+/**
+ * Which document the watched window shows (main.swift "The lesson's window: which document"), as
+ * the watch starts and whenever any of it changes: its `title` (kCGWindowName) and whether it is
+ * on the screen; `top`, while its app is in front, that app's front ordinary window (another of
+ * its windows when the student opened or picked one), with its title and frame; and `other`,
+ * while another app is in front (never Tutornote, nothing under secure input), that app's front
+ * ordinary window with its app; and `secure`, whether secure input is on (a password field has
+ * the keys, somewhere: nothing is read for another document then; false from a helper that does
+ * not say). Titles are the screen's words: never logged.
+ */
+export interface ScreenIdent {
+  window: number;
+  title: string;
+  onScreen: boolean;
+  top: number | null;
+  topTitle: string;
+  topFrame: ScreenIdentWindow["frame"];
+  other: (ScreenIdentWindow & { pid: number; app: string; bundle: string }) | null;
+  secure: boolean;
+}
+
 /** The talk chord, Control and Option held on their own (main.swift "The talk chord"), while
  *  chordWatch is on: "down" once it has been held 300 ms (the page shows the hold's ring), "tap"
  *  at a release within 700 ms, "hold" once at 5 s (talk mode), "up" at the release after a hold,
@@ -235,13 +270,23 @@ export interface ScreenChord {
 
 const CHORD_KINDS: ReadonlySet<string> = new Set<ScreenChord["kind"]>(["down", "tap", "hold", "up", "cancel"]);
 
+/** Whether the talk chord can be used at all, as the helper says it while the chord is watched (as
+ *  the watch goes on, then on each change): off while VoiceOver is on ("voiceover": Control and
+ *  Option are its keys), while secure input is ("secure") and once the modifier keys look hidden
+ *  from the helper ("hidden"). ⌃⌥M is the way in then, and the page names it instead. */
+export interface ScreenChordState {
+  on: boolean;
+  why?: string;
+}
+
 /**
  * What the helper tells unasked while a window is watched: "tap" (a ScreenTap), "scroll" (a
- * ScreenScroll) and "front" (the pid of the app that came to the front; once on watch, then on
- * each change). With the companion on, also "over" (a ScreenOver), "press" (a ScreenPress),
+ * ScreenScroll), "front" (the pid of the app that came to the front; once on watch, then on
+ * each change) and "ident" (a ScreenIdent: which document the window shows, from a helper that
+ * says it). With the companion on, also "over" (a ScreenOver), "press" (a ScreenPress),
  * "release" (a ScreenRelease, ahead of its tap), and taps and scrolls on any window; and
  * "changed" (a ScreenChanged) for the windows observed. While the talk chord is watched
- * (chordWatch), "chord" (a ScreenChord).
+ * (chordWatch), "chord" (a ScreenChord) and "chordState" (a ScreenChordState).
  */
 export const watchEvents = new EventEmitter();
 
@@ -251,6 +296,33 @@ const finiteNumber = (value: unknown): value is number => typeof value === "numb
 function frameOf(value: unknown): ScreenOver["frame"] {
   const f = (value ?? {}) as Record<string, unknown>;
   return finiteNumber(f.x) && finiteNumber(f.y) && finiteNumber(f.w) && finiteNumber(f.h) ? { x: f.x, y: f.y, w: f.w, h: f.h } : null;
+}
+
+/** An "ident" the helper sent, field by field (finite numbers, strings, a boolean), or null. */
+function identOf(msg: Record<string, unknown>): ScreenIdent | null {
+  if (!finiteNumber(msg.window)) return null;
+  const o = (typeof msg.other === "object" && msg.other !== null ? msg.other : null) as Record<string, unknown> | null;
+  const other =
+    o && finiteNumber(o.window) && finiteNumber(o.pid)
+      ? {
+          window: o.window,
+          pid: o.pid,
+          app: typeof o.app === "string" ? o.app : "",
+          bundle: typeof o.bundle === "string" ? o.bundle : "",
+          title: typeof o.title === "string" ? o.title : "",
+          frame: frameOf(o.frame),
+        }
+      : null;
+  return {
+    window: msg.window,
+    title: typeof msg.title === "string" ? msg.title : "",
+    onScreen: msg.onScreen === true,
+    top: finiteNumber(msg.top) ? msg.top : null,
+    topTitle: typeof msg.topTitle === "string" ? msg.topTitle : "",
+    topFrame: frameOf(msg.topFrame),
+    other,
+    secure: msg.secure === true,
+  };
 }
 
 let helper: Helper | null = null;
@@ -348,7 +420,22 @@ function onLine(line: string): void {
     }
     return;
   }
+  if (msg.ev === "ident") {
+    const ident = identOf(msg);
+    if (ident) watchEvents.emit("ident", ident);
+    return;
+  }
   if (msg.ev === "chord") {
+    // (whether it can be used: its own event, never taken for a press of the keys)
+    if (msg.kind === "state") {
+      if (typeof msg.on === "boolean") {
+        watchEvents.emit("chordState", {
+          on: msg.on,
+          ...(typeof msg.why === "string" && msg.why ? { why: msg.why.slice(0, 24) } : {}),
+        } satisfies ScreenChordState);
+      }
+      return;
+    }
     // (a kind this side knows and a time, or nothing: the page only ever hears those two)
     if (typeof msg.kind === "string" && CHORD_KINDS.has(msg.kind) && finiteNumber(msg.ms)) {
       watchEvents.emit("chord", {
@@ -567,6 +654,7 @@ export async function turnWindow(turn: ScreenTurn, signal?: AbortSignal): Promis
     settleMs: typeof answer.settleMs === "number" ? answer.settleMs : 0,
     moved: answer.moved === true,
     front: typeof answer.front === "boolean" ? answer.front : null,
+    still: typeof answer.still === "boolean" ? answer.still : null,
   };
 }
 
@@ -599,8 +687,9 @@ export function companionWatch(on: boolean, stop: number[], privateApps: readonl
 }
 
 /** Watch these windows (two at most: the lesson's and the one under the cursor) for a new look
- *  ("changed"); [] stops, as the companion going off does. Only while the companion is on (paused,
- *  the lesson's window alone, after companionWatch(false)). */
+ *  ("changed"); [] stops, as the companion going off does. The companion's while it is on (paused,
+ *  the lesson's window alone, after companionWatch(false)); with it off, the lesson's own window
+ *  (screenTeach.ts), so a slide the student changes reaches every lesson. */
 export function observeWindows(ids: number[]): void {
   observeAsk = ids.slice(0, 2);
   if (helper) command({ cmd: "observe", windows: observeAsk });

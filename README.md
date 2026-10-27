@@ -346,6 +346,14 @@ clip has finished arriving; the voice headers are readable; recording through th
 permission handler yields Opus; the display blocker engages on Chromium's own audible
 signal.
 
+## The screen tutor
+
+The tutor can also teach a page open in another app (Kindle, Books, a PDF in a browser or
+Preview), with two Swift helpers in `helpers/`, windows that float over other apps, and
+voice that asks once on a tap and talks on a five second hold. How it is built, file by
+file, with the build and test commands and what is not yet tried on real hardware:
+[docs/screen-tutor.md](docs/screen-tutor.md).
+
 ## Layout
 
 ```
