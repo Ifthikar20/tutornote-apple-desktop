@@ -58,10 +58,14 @@ module.exports = {
   },
   // The link that brings a browser sign-in back into the app (src/main/auth.ts).
   protocols: { name: "Tutornote", schemes: ["anothernotes"] },
+  // The GitHub Releases feed electron-updater reads (latest-mac.yml beside the .dmg and .zip).
+  // This must be the repository the release workflow publishes to - this repo
+  // (Ifthikar20/tutornote-apple-desktop), not the old name, or installed apps check a feed that
+  // isn't there and never update (WHAT_TO_FIX.md MAC-09). Confirm latest-mac.yml is reachable.
   publish: {
     provider: "github",
     owner: "Ifthikar20",
-    repo: "Another-note-apple-desktop",
+    repo: "tutornote-apple-desktop",
   },
   mac: {
     category: "public.app-category.education",
