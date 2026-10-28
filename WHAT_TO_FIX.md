@@ -8,6 +8,8 @@ each fix commit names the IDs it closes, and the Status column below is updated 
 
 **13 findings: 4 Medium, 9 Low.**
 
+**Status after the fixes: 8 fixed, 3 partly fixed, 2 left for a person (see "What is left" below the table).**
+
 How to read a finding:
 - **Severity:** how bad it is if exploited, given what is reachable today.
 - **Confidence:** `confirmed` means it was traced or reproduced in the code; `likely` means the code path is
@@ -18,19 +20,41 @@ How to read a finding:
 
 | ID | Severity | Category | What | Status |
 |---|---|---|---|---|
-| MAC-01 | Medium | Native helper | Native helpers' "launched by Tutornote" check can be satisfied by another local process | Open |
-| MAC-02 | Medium | Other (trust boundary / configuration) | Launch environment variables repoint the trusted origin in the packaged app | Open |
-| MAC-03 | Medium (likely) | Electron hardening | Chromium debugging and network switches are honoured; fuses don't cover them | Open |
-| MAC-04 | Medium | CI / supply chain | Release workflow exposes signing and notarisation secrets to third-party build code | Open |
-| MAC-05 | Low | Navigation | A sign-in "round trip" lets any HTTPS host reached by redirect load in the app window with the preload | Open |
-| MAC-06 | Low | Electron hardening | `grantFileProtocolExtraPrivileges` stays on; `offline.html` has no CSP and follows its `url` query parameter | Open |
-| MAC-07 | Low | Deep link | Any website can cancel an in-progress browser sign-in through `anothernotes://auth/…` | Open |
-| MAC-08 | Low | Electron hardening | Microphone silently re-granted to the app origin; desktop CSP still allows Cloudflare's script host | Open |
-| MAC-09 | Low | Update | Update feed points at a repository name that doesn't match this repo | Open |
-| MAC-10 | Low | Electron hardening | Broad hardened-runtime entitlements, inherited by every helper | Open |
-| MAC-11 | Low | Info leak | One-time sign-in secrets and text read from other apps written to stdout; email kept in localStorage | Open |
-| MAC-12 | Low | Hard-coded information | Internal test server address in source and README; `.gitignore` lacks key-file patterns | Open |
-| MAC-13 | Low | CVE | npm audit advisories are build-toolchain only | Open |
+| MAC-01 | Medium | Native helper | Native helpers' "launched by Tutornote" check can be satisfied by another local process | Not fixed: Swift change needs a Mac to build and test (steps below) |
+| MAC-02 | Medium | Other (trust boundary / configuration) | Launch environment variables repoint the trusted origin in the packaged app | Fixed (`055d8a1`) |
+| MAC-03 | Medium (likely) | Electron hardening | Chromium debugging and network switches are honoured; fuses don't cover them | Fixed (`066ca93`) |
+| MAC-04 | Medium | CI / supply chain | Release workflow exposes signing and notarisation secrets to third-party build code | Partly fixed (`ce937dc`) |
+| MAC-05 | Low | Navigation | A sign-in "round trip" lets any HTTPS host reached by redirect load in the app window with the preload | Fixed (`f1856a4`) |
+| MAC-06 | Low | Electron hardening | `grantFileProtocolExtraPrivileges` stays on; `offline.html` has no CSP and follows its `url` query parameter | Partly fixed (`75a15bb`) |
+| MAC-07 | Low | Deep link | Any website can cancel an in-progress browser sign-in through `anothernotes://auth/…` | Fixed (`acc4f33`) |
+| MAC-08 | Low | Electron hardening | Microphone silently re-granted to the app origin; desktop CSP still allows Cloudflare's script host | Partly fixed (`530c08d`) |
+| MAC-09 | Low | Update | Update feed points at a repository name that doesn't match this repo | Fixed (`fc44aee`); check releases land in this repo |
+| MAC-10 | Low | Electron hardening | Broad hardened-runtime entitlements, inherited by every helper | Not fixed: needs a signed build on a Mac to verify (steps below) |
+| MAC-11 | Low | Info leak | One-time sign-in secrets and text read from other apps written to stdout; email kept in localStorage | Fixed (`5a4f4b3`); email opt-in still to do |
+| MAC-12 | Low | Hard-coded information | Internal test server address in source and README; `.gitignore` lacks key-file patterns | Fixed (`72026a0`) |
+| MAC-13 | Low | CVE | npm audit advisories are build-toolchain only | Fixed (`47d7d0e`) |
+
+## What is left
+
+These need a Mac, a signed build or a CI change that should be tested on a real release. Everything else in the table is fixed on this branch. Typecheck passes, `npm test` passes 104/104 (13 new tests), and `npm audit` finds 0.
+
+1. **MAC-01: native helpers.** The Swift was left unchanged, because it can't be built or tested here and a wrong edit would break dictation and the screen tutor. In `helpers/screen/main.swift` and `helpers/speech/main.swift`:
+   - Stop making the helper its own responsible process in signed builds, so macOS attributes the permission to the signed app. Alternatively, make it an XPC service and verify the caller with an audit-token-based code-signing check: never a PID, and never an ancestor chosen by an environment variable.
+   - Hard-code the private-app baseline (Keychain Access, password managers, System Settings) inside the helper, so the app can only add to it.
+   - If the disclaim step must stay, pass a one-time secret on an inherited file descriptor and refuse to run without it.
+   - Rebuild with `scripts/build-*-helper.sh`, and check on a Mac that Screen Recording and Microphone still work.
+2. **MAC-04: release workflow.** Done: a read-only default token, and checkout credentials not persisted. Still to do:
+   - Split the workflow into two jobs:
+     - Job A, with no secrets: runs `npm ci --ignore-scripts`, `npm rebuild electron`, builds the web app and uploads the result.
+     - Job B, with `contents: write` and the signing secrets: downloads that result and runs `electron-builder --publish`.
+   - Pin the web checkout to a reviewed commit, and pin `actions/*` to commit SHAs.
+3. **MAC-06:** same as Windows. Serve `static/` from a dedicated privileged scheme, then set `grantFileProtocolExtraPrivileges: false`. Check in the packaged app that every screen loads.
+4. **MAC-08:** ask once in the app before granting the microphone. The CSP and main-frame-only parts are done.
+5. **MAC-09:** check that releases and `latest-mac.yml` are published to `Ifthikar20/tutornote-apple-desktop` and can be read without a token.
+6. **MAC-10: entitlements.**
+   - On a Mac, build a signed app without `com.apple.security.cs.allow-unsigned-executable-memory` and check that it launches before shipping that change.
+   - Give the helpers their own minimal entitlements: audio-input for the speech helper only. This needs a per-binary codesign step (for example `afterSign`), because `entitlementsInherit` applies to every binary.
+7. **MAC-11:** remember the sign-in email only if the user opts in. Log redaction is done.
 
 Branch `vulnerability_october_vulnerability` (HEAD 87aa789, cut from `claude/beautiful-gauss-rc0er0`, the newest line; this repo has no `feature/october`). Reviewed: `src/main/*`, `src/preload/*`, `static/*`, `helpers/screen`, `helpers/speech`, `build/entitlements.mac.plist`, `electron-builder.config.cjs`, `.github/workflows/mac.yml`, `scripts/*`, the lockfile and git history. `npm test`: 91/91 passing.
 
