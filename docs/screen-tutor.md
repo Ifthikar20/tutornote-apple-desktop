@@ -667,7 +667,8 @@ In `ScreenTeachPage.tsx`:
 - "down" wakes the Mac mic (`voiceWarm(6000)`) and starts the hold; "hold" counts it; every other kind releases it, and a "tap" also goes to `talkKeyTap`.
 - With a lesson up and the student in another app (`presentNow()` false), chord events do nothing; a "hold" then only releases the ring.
 - With no lesson up, a tap goes to the companion dock's mic, but only while the companion is on and `cardMicSupport()` is `"native"`.
-- The page keeps the chord's state in its own `chordUsable`. `screenTalkKey` labels the key `⌃⌥` while the chord works, and `⌃⌥M` while it does not, or when the Mac app has no `onChord` at all.
+- The page keeps the chord's state in its own `chordUsable`. `screenTalkKey` labels the key `⌃⌥` while the chord works, and `⌃⌥M` (`SCREEN_TAP_KEY`) while it does not, or when the Mac app has no `onChord` at all.
+- No line tells the student to hold ⌃⌥M. The four lines that say to hold the key for talk mode (`asleep`, `away`, `micOff`, `companionMic` in `TALK_COPY`) each have a twin ending in `TapKey` that says to hold the mic instead, and `talkHoldLine` picks it when `talkKeyHolds(key)` is false, which is only for ⌃⌥M. A test in `voiceTalk.test.ts` checks it.
 
 ### Half duplex on speakers
 The speech helper's verdict (`OutputWatch`, under "Native helpers") reaches the page as `{ name, transport, source, speakers }`. On the page, `routeOf` in `outputRoute.ts` returns headphones only when `speakers` is exactly `false`. Everything else counts as speakers, including a browser and an older Mac app. Until the Mac app answers, the route is `OUTPUT_UNKNOWN`. `talkDuplex` returns `"full"` only for headphones and `"half"` for everything else. On speakers (half duplex), nothing listens while the tutor plays:
@@ -882,7 +883,7 @@ Voice (round 3):
 - How the chord feels with 33 ms polling on different keyboards, and whether the 0.7 s tap limit is right.
 - Whether a process without Input Monitoring sees the modifier flags. Apple does not document it; the helper detects the case and reports `"why":"hidden"`.
 - Poll timing under load and App Nap. The helper logs `polls N ms apart` once if it happens.
-- Whether ⌃⌥M still fires while secure input is on, and whether holding it makes macOS repeat it. The code treats every ⌃⌥M as a tap. The "press and hold {key}" lines in `TALK_COPY` name ⌃⌥M as the key in the screen tutor when the chord is off, but holding ⌃⌥M does not turn talk mode on there; holding the dock's mic is the only hold that works then.
+- Whether ⌃⌥M still fires while secure input is on, and whether holding it makes macOS repeat it. The code treats every ⌃⌥M as a tap, and the lines shown with ⌃⌥M say to hold the mic, not the key (`talkHoldLine`).
 - The speakers or headphones verdict on real devices, especially Bluetooth and USB devices whose names are in neither `WORN_NAMES` nor `LOUD_NAMES`. They fall to speakers.
 - Whether the tails are long enough in real rooms. `TALK_TAIL_MS` was sized from one MacBook's log; no measurement in the code backs the longer tails.
 - How well the echo check holds up against sound leaking out of headphones.
