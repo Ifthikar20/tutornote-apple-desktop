@@ -1,6 +1,7 @@
-import { app, dialog } from "electron";
+import { app, dialog, type BrowserWindow } from "electron";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
+import { classifyCallback, consumesPending } from "./authCallback";
 import { API_URL, APP_ORIGIN, BUNDLED, SITE_ORIGIN } from "./config";
 import { openExternal } from "./links";
 import { focusMainWindow, openAfterSignIn } from "./windows";
@@ -59,40 +60,19 @@ export function deepLinksIn(argv: string[]): string[] {
   return argv.filter((arg) => arg.startsWith(`${PROTOCOL}://`));
 }
 
-/** Where the API's exchange lives for this code; null when the link is not one this app is waiting for. */
-export function exchangeUrlFor(raw: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== `${PROTOCOL}:` || url.hostname !== "auth" || url.pathname !== "/callback") return null;
-  const code = url.searchParams.get("code") ?? "";
-  const state = url.searchParams.get("state") ?? "";
-  const current = pending;
-  pending = null;
-  if (!current || Date.now() - current.startedAt > PENDING_TTL_MS) return null;
-  if (state !== current.state || !TOKEN.test(code)) return null;
-  // With the bundled renderer the exchange goes through the app's origin (renderer.ts
-  // forwards it and brings the redirect to /auth/callback back into the bundle).
+/** The API's exchange URL for an accepted callback (the bundled renderer forwards it through the
+ *  app's own origin; renderer.ts brings the redirect to /auth/callback back into the bundle). */
+function exchangeUrl(code: string, state: string, verifier: string): string {
   const exchange = new URL(BUNDLED ? `${APP_ORIGIN}/api/auth/desktop/exchange` : `${API_URL}/auth/desktop/exchange`);
   exchange.searchParams.set("code", code);
   exchange.searchParams.set("state", state);
-  exchange.searchParams.set("code_verifier", current.verifier);
+  exchange.searchParams.set("code_verifier", verifier);
   return exchange.toString();
 }
 
-/** A link the OS delivered. Only auth/callback means anything; anything else just brings the window up. */
-export function handleDeepLink(raw: string): void {
-  if (!raw.startsWith(`${PROTOCOL}://`)) return;
-  const win = focusMainWindow();
-  const exchange = exchangeUrlFor(raw);
-  if (exchange) {
-    openAfterSignIn(exchange);
-    return;
-  }
-  if (new URL(raw).hostname !== "auth") return;
+/** Offer to start the browser sign-in again (a callback that was this app's own but came too late,
+ *  or carried a malformed code). */
+function offerRestart(win: BrowserWindow): void {
   void dialog
     .showMessageBox(win, {
       type: "info",
@@ -105,6 +85,30 @@ export function handleDeepLink(raw: string): void {
     .then(({ response }) => {
       if (response === 0) beginBrowserSignIn();
     });
+}
+
+/** A link the OS delivered. Only an auth/callback that carries this sign-in's own state means
+ *  anything; anything else just brings the window up, and never gives up the waiting sign-in
+ *  (authCallback.ts; WHAT_TO_FIX.md MAC-07). */
+export function handleDeepLink(raw: string): void {
+  if (!raw.startsWith(`${PROTOCOL}://`)) return;
+  const win = focusMainWindow();
+  const result = classifyCallback(raw, pending, Date.now(), { schemes: [PROTOCOL], ttlMs: PENDING_TTL_MS, token: TOKEN });
+  // The waiting sign-in is given up only once a link with its own state arrives (classifyCallback).
+  if (consumesPending(result)) pending = null;
+  switch (result.kind) {
+    case "ok":
+      openAfterSignIn(exchangeUrl(result.code, result.state, result.verifier));
+      return;
+    case "expired":
+    case "bad-code":
+      offerRestart(win);
+      return;
+    case "wrong-state":
+    case "no-pending":
+    case "not-callback":
+      return;
+  }
 }
 
 /** Make this app the one the OS opens anothernotes:// links with. */
