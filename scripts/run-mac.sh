@@ -2,7 +2,7 @@
 # Build Tutornote for the Mac and open it, with its logs in this terminal.
 #
 #   scripts/run-mac.sh                          the live site, packaged .app
-#   scripts/run-mac.sh http://100.49.56.40/     a test server instead
+#   scripts/run-mac.sh http://<test-server>/     a test server instead
 #   scripts/run-mac.sh --dev [url]              from source with Electron, no .app (fastest)
 #   scripts/run-mac.sh --dist [url]             also build the universal .dmg
 #   scripts/run-mac.sh --key [url]              ask for the maintenance-gate team key first

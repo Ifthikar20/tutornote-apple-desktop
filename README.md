@@ -82,12 +82,12 @@ its logs in the terminal. Ctrl-C quits the app.
 
 ```sh
 scripts/run-mac.sh                          # against tutornote.ai
-scripts/run-mac.sh http://100.49.56.40/     # against a test server
-scripts/run-mac.sh --dev http://100.49.56.40/   # from source, no .app: fastest
+scripts/run-mac.sh http://<test-server>/     # against a test server
+scripts/run-mac.sh --dev http://<test-server>/   # from source, no .app: fastest
 scripts/run-mac.sh --renderer               # rebuild the web app bundle first
 scripts/run-mac.sh --site                   # load the site in the window, no bundle
 scripts/run-mac.sh --dist                   # also build the universal .dmg
-scripts/run-mac.sh --key http://100.49.56.40/   # ask for the maintenance-gate key first
+scripts/run-mac.sh --key http://<test-server>/   # ask for the maintenance-gate key first
 ```
 
 The web app comes from `scripts/build-renderer.sh`: it clones (or updates) the
@@ -185,7 +185,7 @@ the `an_preview` cookie holds the team key), give the app the key once and it ke
 for 30 days, in its own profile:
 
 ```sh
-ANOTHERNOTES_URL=http://100.49.56.40/ ANOTHERNOTES_PREVIEW_KEY='the team key' npm start
+ANOTHERNOTES_URL=http://<test-server>/ ANOTHERNOTES_PREVIEW_KEY='the team key' npm start
 ```
 
 The app never shows the gate's "Back soon" page itself: a 503 is dropped before it

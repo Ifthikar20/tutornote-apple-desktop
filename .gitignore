@@ -9,3 +9,12 @@ renderer/
 .web/
 # The Mac speech helper, built by scripts/build-speech-helper.sh
 build/helpers/
+# Never commit settings files or signing material
+.env
+.env.*
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+*.mobileprovision
