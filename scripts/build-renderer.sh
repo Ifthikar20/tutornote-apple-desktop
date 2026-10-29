@@ -3,11 +3,18 @@
 # which the desktop app serves from its own origin and packages (src/main/renderer.ts).
 #
 #   scripts/build-renderer.sh                                   clone/update .web/ from GitHub, build
-#   ANOTHERNOTES_WEB_DIR=../playstudy-card-dash scripts/build-renderer.sh   a checkout you already have
+#   ANOTHERNOTES_WEB_DIR=../tutornote-web scripts/build-renderer.sh   a checkout you already have
 #   ANOTHERNOTES_WEB_REF=main scripts/build-renderer.sh         a branch or tag (the .web/ clone only)
 #
 # The build is `npm run build:off` (Turnstile off, API at the relative /api), the same
 # profile deploy-aws.sh ships by default. VITE_* variables in the environment override it.
+#
+# renderer/BUILD names what was built, from the checkout as it was built (web_label):
+#   <short sha> (<branch>, pushed|not pushed|dirty) <UTC time>
+# "dirty": a file git tracks was changed, or there is one it neither tracks nor ignores (the bundle
+# may hold it: public/ is copied whole), so the bundle is not that commit alone; "pushed": no such
+# change, and a remote's branch holds the commit, as the checkout last fetched it; "not pushed":
+# neither. A detached checkout (a tag) says "detached" for its branch.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,6 +24,24 @@ WEB_REF="${ANOTHERNOTES_WEB_REF:-}"
 OUT="$ROOT/renderer"
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
+
+# The label for renderer/BUILD (above), less its time: the checkout at $1, as it is now.
+web_label() {
+  local dir="$1" sha branch state
+  if ! sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)"; then
+    printf 'local (not a git checkout)'
+    return
+  fi
+  branch="$(git -C "$dir" symbolic-ref --short -q HEAD 2>/dev/null || echo detached)"
+  if [ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
+    state="dirty"
+  elif [ -n "$(git -C "$dir" branch -r --contains HEAD 2>/dev/null)" ]; then
+    state="pushed"
+  else
+    state="not pushed"
+  fi
+  printf '%s (%s, %s)' "$sha" "$branch" "$state"
+}
 
 # Node 22 or later, as in run-mac.sh: nvm and .nvmrc, with npm_config_prefix dropped for this
 # script (nvm refuses to run with it set), else the Node 22 nvm installed, found by its path.
@@ -60,11 +85,13 @@ if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.j
   say "installing the web app's dependencies"
   npm ci --no-audit --no-fund
 fi
-say "building the web app (build:off)"
+# (the checkout as it is built: the build's own output is ignored there, but is never asked)
+LABEL="$(web_label "$WEB_DIR")"
+say "building the web app (build:off): $LABEL"
 npm run build:off
 
 say "copying the bundle into renderer/"
 rm -rf "$OUT"
 cp -R "$WEB_DIR/dist" "$OUT"
-printf '%s %s\n' "$(git -C "$WEB_DIR" rev-parse --short HEAD 2>/dev/null || echo local)" "$(date -u +%Y-%m-%dT%H:%MZ)" > "$OUT/BUILD"
+printf '%s %s\n' "$LABEL" "$(date -u +%Y-%m-%dT%H:%MZ)" > "$OUT/BUILD"
 say "renderer/ is $(cat "$OUT/BUILD") ($(du -sh "$OUT" | cut -f1))"

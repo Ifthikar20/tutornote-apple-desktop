@@ -3,7 +3,8 @@
   Chrome or Preview) so the tutor can teach the page the student points at. It finds the
   window under a point on the screen, takes one picture of that window alone, and reads its
   text with Apple's Vision framework, on this Mac. Nothing is kept: the picture is dropped
-  once read, and only the lines and their words go back to the app.
+  once read, and only the lines and their words go back to the app (and, with a read a lesson
+  teaches from, where the page's paper, rules and other marks are: numbers, never pixels).
 
   During a lesson it also turns that window's page: it scrolls it or presses a key in its
   app (which needs Accessibility), or waits for the student to do it, then watches small
@@ -72,12 +73,16 @@
                                                    picture taken, "acted" false). `readers`:
                                                    the apps whose bars fade in and out at a
                                                    click on their page (judgeTap vets the look)
-         {"cmd":"observe","windows":[12345,23456]} watch these (two at most) for a new look
+         {"cmd":"observe","windows":[12345,23456],"page":[12345]}
+                                                   watch these (two at most) for a new look
                                                    ("changed"), the companion on or not (the
                                                    app asks for the lesson's window and the one
                                                    under the cursor while it is on, and for the
                                                    lesson's window alone while it is paused or
-                                                   off); [] stops, as "companion" off does
+                                                   off); [] stops, as "companion" off does.
+                                                   "page" (optional): those of them that turn
+                                                   by the page (Kindle, Books), where no wheel
+                                                   explains a new look (scrollExplains)
          {"cmd":"chord","on":true}                 watch for the talk chord (Control and Option
                                                    pressed on their own, in any app: "The talk
                                                    chord", polled, no permission), or stop (a
@@ -87,10 +92,26 @@
          {"id":1,"ev":"read","app":"Kindle","bundle":"com.amazon.Lassen","title":"…",
           "window":12345,"pid":678,"frame":{"x":…,"y":…,"w":…,"h":…},
           "lines":[{"t":"…","c":0.98,"x":…,"y":…,"w":…,"h":…,
-                    "words":[{"t":"…","x":…,"y":…,"w":…,"h":…}]}],
-          "captureMs":120,"ocrMs":640,"ground":0.94,"level":"accurate"}
+                    "words":[{"t":"…","x":…,"y":…,"w":…,"h":…,"wg":true}]}],
+          "captureMs":120,"ocrMs":640,"ground":0.94,"level":"accurate","wordless":0,"guessed":1,
+          "paper":{…},"rules":[{…}],"ink":{"x":…,"y":…,"cell":8,"cols":63,"rows":113,"bits":"…"},
+          "inkMs":7}
                                                    line and word boxes in screen points too;
-                                                   a line Vision cannot split has no words.
+                                                   a word Vision cannot place is placed by its
+                                                   share of the line's characters between its
+                                                   neighbours, "wg" (guessed: wordBoxes); a line
+                                                   Vision places none of has no words.
+                                                   "wordless", "guessed": how many lines went
+                                                   without words, and how many words were guessed.
+                                                   "paper", "rules", "ink" (a read at the accurate
+                                                   level only, never a glance: "What else the page
+                                                   draws"): where the page's paper is (none when
+                                                   it cannot be told), the rules drawn on it (64 at
+                                                   most), and a grid of 8 point cells over the
+                                                   paper (else the window), 400 at most each way,
+                                                   a cell's bit set where it is drawn on besides
+                                                   the words (base64; cell r * cols + c is bit
+                                                   i & 7 of byte i >> 3); "inkMs": finding them.
                                                    "ground": how bright the window is, 0 (black)
                                                    to 1 (white), from its thumbnail; "level":
                                                    the pass that read it, "fast" or "accurate";
@@ -146,7 +167,8 @@
                                                    well, or -1
          {"ev":"press","x":…,"y":…,"window":12345} with the companion on: the button went down
                                                    on an ordinary window (at once, before any
-                                                   picture)
+                                                   picture); with it off, on the watched window
+                                                   alone
          {"ev":"over","window":12345,"pid":678,"app":"Kindle","bundle":"…","title":"…",
           "frame":{…},"own":false,"secure":false}  with the companion on: the window the cursor
                                                    is over changed. "window" null over nothing
@@ -155,15 +177,26 @@
          {"ev":"changed","window":12345,"settleMs":300}
                                                    an observed window settled into a new look
                                                    (once, until it looks different again) that
-                                                   no wheel scroll told already explains; its
-                                                   middle rows only (a change in its top and
-                                                   bottom 12% alone, a reader's bars, is none)
+                                                   no wheel scroll told already explains (one
+                                                   up or down, in a window not observed as
+                                                   "page"); its middle rows only (a change in
+                                                   its top and bottom 12% alone, a reader's
+                                                   bars, is none)
+         {"ev":"keyed","window":12345}             a key went down in the watched window's app,
+                                                   in front, that window observed (the first of
+                                                   a run of keys, then one at most every
+                                                   KEY_RUN_S while they keep coming: keyTick);
+                                                   never which key, and never a lesson's own
+                                                   turn's
          {"ev":"front","pid":678,"bundle":"…"}     the app in front (on watch, then on each change)
-         {"ev":"ident","window":12345,"title":"…","onScreen":true,"top":12345,"topTitle":"…",
-          "topFrame":{…},"other":{"window":23456,"pid":789,"app":"Preview","bundle":"…",
-                                  "title":"…","frame":{…}},"secure":false}
+         {"ev":"ident","window":12345,"title":"…","onScreen":true,"frame":{…},"top":12345,
+          "topTitle":"…","topFrame":{…},"other":{"window":23456,"pid":789,"app":"Preview",
+                                  "bundle":"…","title":"…","frame":{…}},"secure":false}
                                                    the watched window's title and whether it is
-                                                   on the screen; "top" (null while its app is
+                                                   on the screen; "frame": where it is (left out
+                                                   once it is listed no more: closed), so a drag
+                                                   of it, its app in front or not, is said on
+                                                   every tick while it goes; "top" (null while its app is
                                                    not in front): its app's front ordinary
                                                    window, "topTitle" and "topFrame" its title and
                                                    frame; "other" (only while another app is in
@@ -173,13 +206,16 @@
                                                    watch starts, then whenever any of it changes
                                                    (looked at every IDENT_MS, and as an app comes
                                                    to the front)
-         {"ev":"scroll","dy":12.5,"dx":0,"momentum":false,"window":12345}
+         {"ev":"scroll","dy":12.5,"dx":0,"lines":0,"momentum":false,"window":12345}
                                                    the student scrolled the watched window (with
                                                    the companion on, the one under the cursor):
                                                    its content moved up by dy points (down if
-                                                   less than 0) and left by dx; "momentum": the
-                                                   glide after the fingers left the trackpad;
-                                                   never the helper's own turns
+                                                   less than 0) and left by dx; "lines": a mouse
+                                                   wheel's lines in dy's sense, each taken as
+                                                   WHEEL_LINE_PT points in dy (0 for a trackpad's
+                                                   points: wheelStep); "momentum": the glide
+                                                   after the fingers left the trackpad; never
+                                                   the helper's own turns
          {"ev":"chord","kind":"tap","ms":180,"keys":"lctrl+lopt"}
                                                    the talk chord, with "chord" on: "down" (held
                                                    300 ms: the page shows the hold's ring), "hold"
@@ -205,9 +241,10 @@
                                                    no_access, capture_failed, bad_command,
                                                    cancelled
 
-  `tutornote-screen --selftest` checks the picture arithmetic and the words rule on pictures it
-  draws itself (no screen needed), and the talk chord's steps on made up presses, and exits 0 or
-  1. `tutornote-screen --chordtest` (in Terminal, for a person at the keyboard) prints what the
+  `tutornote-screen --selftest` checks the picture arithmetic, the words rule, and a page's paper,
+  rules and ink on pictures it draws itself (no screen needed), a line's guessed words on made up
+  boxes, a wheel's step and the keys that burst a window on made up numbers, and the talk chord's
+  steps on made up presses, and exits 0 or 1. `tutornote-screen --chordtest` (in Terminal, for a person at the keyboard) prints what the
   chord's polls see for 20 s; it needs no app, shows no window and asks for nothing.
 
   Needs macOS 14 (ScreenCaptureKit's one-picture capture). The app shows no button when the
@@ -474,23 +511,120 @@ enum Which {
     case window(CGWindowID)
 }
 
+/// A word of a line as a read sends it: its text, its box, and whether the box is only guessed
+/// (wordBoxes: Vision could not place it).
+typealias ReadWord = (text: String, box: CGRect, guessed: Bool)
+
 /// A line's words, each a run of anything but spaces (so its punctuation comes with it), with
 /// Vision's box for it: a fraction of the picture from its bottom left, like the line's own.
-/// Nil when Vision cannot place every word, or gives a word the whole line's box (it does for
-/// some scripts): the line then goes without words and the page places it as one piece,
-/// rather than with words missing or piled on top of each other.
-func words(of text: VNRecognizedText, lineBox: CGRect) -> [(text: String, box: CGRect)]? {
-    let string = text.string
-    var found: [(text: String, box: CGRect)] = []
+/// Vision cannot always place a word (no box, a box of nothing, or on a line of two words or
+/// more a box of 95% of the line or more, as it gives for some scripts). Such a word is placed
+/// by its share of the line's characters, as textRows places a row's words, but only across the
+/// room between the words Vision did place either side of it (the line's own ends past the first
+/// and the last), so it lies in order, clear of them and inside the line, which the page needs
+/// to keep a line's word boxes at all (screenBlocks cleaned); and it is flagged guessed. One
+/// failing word used to cost the whole line its words. Nil, as then, only when Vision places
+/// none of them, or leaves one no room between its neighbours: the line goes without words and
+/// the page places it as one piece, rather than with words piled on top of each other. `box`:
+/// Vision's box for a word, given its range in `string`.
+func wordBoxes(_ string: String, lineBox: CGRect, box: (Range<String.Index>) -> CGRect?) -> [ReadWord]? {
+    var runs: [(range: Range<String.Index>, from: Int, to: Int)] = []
     var index = string.startIndex
+    var at = 0
     while let start = string[index...].firstIndex(where: { !$0.isWhitespace }) {
         let end = string[start...].firstIndex(where: { $0.isWhitespace }) ?? string.endIndex
-        guard let observation = try? text.boundingBox(for: start..<end) else { return nil }
-        found.append((String(string[start..<end]), observation.boundingBox))
+        let from = at + string.distance(from: index, to: start)
+        let to = from + string.distance(from: start, to: end)
+        runs.append((start..<end, from, to))
         index = end
+        at = to
     }
-    if found.count > 1 && found.contains(where: { $0.box.width >= lineBox.width * 0.95 }) { return nil }
-    return found.isEmpty ? nil : found
+    guard !runs.isEmpty else { return nil }
+    let placed: [CGRect?] = runs.map { run in
+        guard let found = box(run.range), found.width > 0, found.height > 0, found.minX.isFinite, found.maxX.isFinite,
+              runs.count == 1 || found.width < lineBox.width * 0.95
+        else { return nil }
+        return found
+    }
+    let anchors = placed.compactMap { $0 }
+    guard let first = anchors.first, let last = anchors.last else { return nil }
+    // A line laid right to left (Vision's boxes running leftwards): its characters count from its
+    // right. With one word placed there is no run of boxes to tell by, and the line's script tells
+    // (a guess laid left to right on a Hebrew line would put each word on another's place).
+    let leftwards = anchors.count > 1 ? first.midX > last.midX : rightToLeft(string)
+    let characters = string.count
+    var words: [ReadWord] = []
+    for (i, run) in runs.enumerated() {
+        let text = String(string[run.range])
+        if let found = placed[i] {
+            words.append((text, found, false))
+            continue
+        }
+        // The room it shares with the other unplaced words beside it: from the end of the word
+        // placed before it (or the line's start) to the start of the one placed after it (or the
+        // line's end), as characters and as the line's x.
+        let before = placed[..<i].lastIndex(where: { $0 != nil })
+        let after = placed[(i + 1)...].firstIndex(where: { $0 != nil })
+        let fromChar = before.map { runs[$0].to } ?? 0
+        let toChar = after.map { runs[$0].from } ?? characters
+        let fromX = before.map { leftwards ? placed[$0]!.minX : placed[$0]!.maxX } ?? (leftwards ? lineBox.maxX : lineBox.minX)
+        let toX = after.map { leftwards ? placed[$0]!.maxX : placed[$0]!.minX } ?? (leftwards ? lineBox.minX : lineBox.maxX)
+        let room = leftwards ? fromX - toX : toX - fromX
+        guard room > 0, toChar > fromChar else { return nil }
+        func x(_ char: Int) -> CGFloat { fromX + (leftwards ? -1 : 1) * room * CGFloat(char - fromChar) / CGFloat(toChar - fromChar) }
+        let a = x(run.from)
+        let b = x(run.to)
+        words.append((text, CGRect(x: min(a, b), y: lineBox.minY, width: abs(b - a), height: lineBox.height), true))
+    }
+    return words
+}
+
+/// Whether a line is written right to left: its first letter is in a script written that way
+/// (Hebrew, Arabic and their neighbours).
+func rightToLeft(_ string: String) -> Bool {
+    guard let letter = string.unicodeScalars.first(where: { $0.properties.isAlphabetic }) else { return false }
+    switch letter.value {
+    case 0x0590...0x08FF, 0xFB1D...0xFDFF, 0xFE70...0xFEFF, 0x10800...0x10FFF, 0x1E800...0x1EFFF: return true
+    default: return false
+    }
+}
+
+/// A line's words as Vision read them (wordBoxes).
+func words(of text: VNRecognizedText, lineBox: CGRect) -> [ReadWord]? {
+    wordBoxes(text.string, lineBox: lineBox) { range in (try? text.boundingBox(for: range))?.boundingBox }
+}
+
+/// A line as a read sends it, in screen points: its text and Vision's confidence, its box, and
+/// its words (nil: it goes without them).
+struct ReadLine {
+    let text: String
+    let confidence: Double
+    let box: CGRect
+    let words: [ReadWord]?
+}
+
+/// Vision's lines as a read sends them, front to back. Vision's boxes are fractions of the
+/// picture from its bottom left, and the picture is the window's `frame`: this puts a line or a
+/// word back in screen points from the top left.
+func readLines(_ observations: [VNRecognizedTextObservation], frame: CGRect) -> [ReadLine] {
+    func place(_ box: CGRect) -> CGRect {
+        CGRect(x: frame.minX + box.minX * frame.width, y: frame.minY + (1 - box.maxY) * frame.height,
+               width: box.width * frame.width, height: box.height * frame.height)
+    }
+    var lines: [ReadLine] = []
+    for observation in observations {
+        guard let best = observation.topCandidates(1).first else { continue }
+        let text = best.string.trimmingCharacters(in: .whitespaces)
+        if text.isEmpty { continue }
+        let found = words(of: best, lineBox: observation.boundingBox)?.map { (text: $0.text, box: place($0.box), guessed: $0.guessed) }
+        lines.append(ReadLine(text: text, confidence: Double(best.confidence), box: place(observation.boundingBox), words: found))
+    }
+    return lines
+}
+
+/// A box's fields as the protocol sends them, with `fields` of its own.
+func boxFields(_ box: CGRect, _ fields: [String: Any] = [:]) -> [String: Any] {
+    fields.merging(["x": Double(box.minX), "y": Double(box.minY), "w": Double(box.width), "h": Double(box.height)]) { _, new in new }
 }
 
 /*
@@ -518,6 +652,16 @@ func recognize(_ image: CGImage, _ level: Level) throws -> [VNRecognizedTextObse
     return request.results ?? []
 }
 
+/// The picture a read is made from, and its thumbnail (`small`) taken alongside it rather than
+/// after: the same moment, which unlessMoved and observe compare later looks with, in the time of
+/// the one picture.
+func picture(_ filter: SCContentFilter, _ config: SCStreamConfiguration, _ small: SCStreamConfiguration) async throws -> (image: CGImage, thumb: [UInt8]?) {
+    async let image = SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    async let thumb = thumbnail(filter, small)
+    let taken = try await image
+    return (taken, try? await thumb)
+}
+
 func read(id: Int, which: Which, level: Level = .accurate) async {
     guard CGPreflightScreenCaptureAccess() else {
         emit(["id": id, "ev": "error", "code": "no_permission"])
@@ -541,31 +685,27 @@ func read(id: Int, which: Which, level: Level = .accurate) async {
     let image: CGImage
     var seen: [UInt8]?
     do {
-        // A glance takes the window's handle from the companion's keep (cachedFilter, a few
-        // milliseconds) rather than asking for every window on the screen again.
-        let kept = level == .fast ? try? await cachedFilter(target.id) : nil
-        let filter: SCContentFilter
-        if let kept {
-            filter = kept
-        } else {
-            guard let window = try await shareableWindow(target.id) else {
-                emit(["id": id, "ev": "error", "code": missing])
-                return
-            }
-            // The window alone: nothing drawn over it (the app's own pointer and panel) is in the picture.
-            filter = SCContentFilter(desktopIndependentWindow: window)
-        }
         let config = SCStreamConfiguration()
         let scale = min(scaleFor(target.frame), MAX_PIXELS_WIDE / max(target.frame.width, 1))
         config.width = Int(target.frame.width * scale)
         config.height = Int(target.frame.height * scale)
         config.showsCursor = false
         config.ignoreShadowsSingleWindow = true
-        image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        let small = thumbnailConfig(for: target.frame)
+        // Every read, a lesson's careful one too, takes the window's handle from the keep
+        // (throughFilter: a few milliseconds) rather than asking for every window on the screen
+        // again (tens of milliseconds): the tutor over another app "should be super responsive"
+        // (the founder, 2026-10-28). The window alone: nothing drawn over it (the app's own
+        // pointer and panel) is in the picture.
+        guard let taken = try await throughFilter(target.id, frame: target.frame, { try await picture($0, config, small) }) else {
+            emit(["id": id, "ev": "error", "code": missing])
+            return
+        }
+        image = taken.image
         // How it looks as it is read, small: a turn that goes only if the window has not moved
         // since (unlessMoved) compares with this, and so does the companion's watch for a new
         // look (observe). Its brightness is the page's ground.
-        seen = try? await thumbnail(filter, thumbnailConfig(for: target.frame))
+        seen = taken.thumb
         if let seen { remember(target.id, seen) }
     } catch {
         log("[screen] capture failed: \(error.localizedDescription)")
@@ -592,26 +732,30 @@ func read(id: Int, which: Which, level: Level = .accurate) async {
         return
     }
     let frame = target.frame
-    // Vision's box is a fraction of the picture, from its bottom left; the picture is the
-    // window's frame, so this puts a line or a word back in screen points from the top left.
-    func place(_ box: CGRect, _ fields: [String: Any]) -> [String: Any] {
-        fields.merging([
-            "x": Double(frame.minX + box.minX * frame.width),
-            "y": Double(frame.minY + (1 - box.maxY) * frame.height),
-            "w": Double(box.width * frame.width),
-            "h": Double(box.height * frame.height),
-        ]) { _, new in new }
-    }
+    // (placing the words asks Vision for their boxes: part of the reading, as it always was)
+    let textLines = readLines(observations, frame: frame)
+    let ocrMs = msSince(ocrStarted)
     var lines: [[String: Any]] = []
-    for observation in observations {
-        guard let best = observation.topCandidates(1).first else { continue }
-        let text = best.string.trimmingCharacters(in: .whitespaces)
-        if text.isEmpty { continue }
-        var line = place(observation.boundingBox, ["t": text, "c": Double(best.confidence)])
-        if let found = words(of: best, lineBox: observation.boundingBox) {
-            line["words"] = found.map { place($0.box, ["t": $0.text]) }
+    // (counts only, to see how often Vision cannot place a word on real pages)
+    var wordless = 0
+    var guessed = 0
+    for line in textLines {
+        var fields = boxFields(line.box, ["t": line.text, "c": line.confidence])
+        if let placed = line.words {
+            fields["words"] = placed.map { boxFields($0.box, $0.guessed ? ["t": $0.text, "wg": true] : ["t": $0.text]) }
+            guessed += placed.filter(\.guessed).count
+        } else {
+            wordless += 1
         }
-        lines.append(line)
+        lines.append(fields)
+    }
+    // What else the page draws, for a read a lesson teaches from: never a glance's, even one
+    // read again accurately.
+    var drawn: [String: Any] = [:]
+    if level == .accurate {
+        let inkStarted = DispatchTime.now()
+        if let geometry = pageGeometry(image, frame: frame, lines: textLines) { drawn = geometryFields(geometry) }
+        drawn["inkMs"] = msSince(inkStarted)
     }
     let app = NSRunningApplication(processIdentifier: target.pid)
     var answer: [String: Any] = [
@@ -625,12 +769,315 @@ func read(id: Int, which: Which, level: Level = .accurate) async {
         "frame": ["x": Double(frame.minX), "y": Double(frame.minY), "w": Double(frame.width), "h": Double(frame.height)],
         "lines": lines,
         "captureMs": captureMs,
-        "ocrMs": msSince(ocrStarted),
+        "ocrMs": ocrMs,
         "level": used.rawValue,
+        "wordless": wordless,
+        "guessed": guessed,
     ]
+    answer.merge(drawn) { _, new in new }
     if let seen { answer["ground"] = ground(seen) }
     if heldMs >= TAP_HOLD_POLL_MS { answer["heldMs"] = heldMs }
     emit(answer)
+}
+
+// MARK: - What else the page draws
+
+/*
+  A read a lesson teaches from also says where the page's paper is and what else is drawn on it
+  besides the words read, so the lesson can write on a page in another app as it does on the
+  web's own reader (the founder, 2026-10-28: "the part where we write on the PDF documents. That
+  has to work in our Mac application"): the paper (a PDF page inside Preview's grey or Chrome's
+  dark viewer), the rules drawn across it (an answer's line, a blank's drawn line), and a coarse
+  grid of where else it is drawn on (a figure, a drawn box, a hand's working), the words' own
+  boxes left out. All of it from the picture already taken, drawn again in grey at a pixel a
+  point. Numbers go back, never a pixel; the picture is dropped with the rest once read, and
+  none of it is logged here (the app logs counts and times at most).
+
+  Every test is by the distance from the paper's own grey, the commonest one inside the lines
+  read (between their letters): a dark page (a night theme) has a dark paper, and light marks
+  on it count as dark ones do on a white page.
+*/
+
+/// The paper's grey is the commonest (within four shades) inside the lines read only when it
+/// is at least this share of them: else the words sit on no one ground (a photograph), and
+/// nothing of the page is sent.
+let PAPER_PEAK = 0.3
+/// A grey this near the paper's (0 to 255) is the paper, when telling it from the viewer around
+/// it: a rendered page is one flat grey, and a scan's speckle mostly stays within this.
+let PAPER_NEAR = 12
+/// A line sits on the paper when this share of its box is the paper.
+let PAPER_SITS = 0.5
+/// A column (over the lines' rows) or a row (over the paper's columns) with fewer of its pixels
+/// paper than this is past the paper's edge: the viewer around a page is all one other grey,
+/// while a figure keeps the page's margins either side of it.
+let PAPER_EDGE_SHARE = 0.08
+/// A grey this far from the paper's is drawn on: a rule, a figure, a box, a stroke (a tinted
+/// panel or a pale highlight is not: writing goes over those as over the paper).
+let MARK_FAR = 48
+/// The words' boxes, this much bigger (points), are left out of the rules and the ink.
+let WORD_PAD: CGFloat = 2
+/// A rule is a run of marked pixels along a row at least RULE_MIN points long (or RULE_MIN_SHARE
+/// of the paper's width, if more), at most RULE_THICK rows thick together, as the web's rulesIn
+/// (writePlace.ts) finds them on its own reader's page: letters break every row, a filled box or
+/// a figure is thicker. RULES_KEPT at most, top to bottom.
+let RULE_MIN: CGFloat = 40
+let RULE_MIN_SHARE: CGFloat = 0.08
+let RULE_THICK = 3
+let RULES_KEPT = 64
+/// The ink grid's cells are INK_CELL points square, INK_CELLS_MOST at most each way; a cell with
+/// more than INK_SHARE of its pixels marked is drawn on (the web's own INK_SHARE).
+let INK_CELL = 8
+let INK_CELLS_MOST = 400
+let INK_SHARE = 0.02
+
+/// Where else the page is drawn on: `cols` x `rows` cells of INK_CELL points from (x, y) in
+/// screen points, row by row, a bit each (cell i = r * cols + c is set when bits[i >> 3] has
+/// bit i & 7).
+struct InkGrid {
+    let x: Double
+    let y: Double
+    let cols: Int
+    let rows: Int
+    let bits: [UInt8]
+
+    func inked(col: Int, row: Int) -> Bool {
+        guard col >= 0, col < cols, row >= 0, row < rows else { return false }
+        let i = row * cols + col
+        return bits[i >> 3] & UInt8(1 << (i & 7)) != 0
+    }
+}
+
+/// What an accurate read sends of its page besides the words, in screen points: the paper (nil
+/// when it cannot be told), the rules drawn on it, and the ink grid over the paper (over the
+/// window with no paper).
+struct PageGeometry {
+    let paper: CGRect?
+    let rules: [CGRect]
+    let ink: InkGrid
+}
+
+/// Whether a text has a letter or a digit: the words the page keeps (screenBlocks cleaned).
+func hasLetterOrDigit(_ text: String) -> Bool {
+    text.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+}
+
+/// The runs of `true` in `flags`, each [start, end).
+func trueRuns(_ flags: [Bool]) -> [Range<Int>] {
+    var runs: [Range<Int>] = []
+    var start: Int?
+    for (i, on) in flags.enumerated() {
+        if on, start == nil { start = i }
+        if !on, let s = start {
+            runs.append(s..<i)
+            start = nil
+        }
+    }
+    if let s = start { runs.append(s..<flags.count) }
+    return runs
+}
+
+/// The page in `image`, a picture of the window's `frame` (screen points), with `lines` read from
+/// it: its paper, its rules and its ink, or nil when its paper's grey cannot be told.
+func pageGeometry(_ image: CGImage, frame: CGRect, lines: [ReadLine]) -> PageGeometry? {
+    let width = Int(frame.width.rounded())
+    let height = Int(frame.height.rounded())
+    guard width > 0, height > 0, width * height <= 40_000_000 else { return nil }
+    // Drawn small in its own colours, then made grey here: drawn straight into grey, the colour
+    // matching alone took 20 ms of a page. (`.low` still averages a hairline's two pixels into one.)
+    let space = image.colorSpace.flatMap { $0.model == .rgb && $0.supportsOutput ? $0 : nil } ?? CGColorSpaceCreateDeviceRGB()
+    var colour = [UInt8](repeating: 0, count: width * height * 4)
+    let drawn = colour.withUnsafeMutableBytes { buffer -> Bool in
+        guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width * 4, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return false }
+        context.interpolationQuality = .low
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return true
+    }
+    guard drawn else { return nil }
+    var grey = [UInt8](repeating: 0, count: width * height)
+    // (the pixels with little or nothing drawn: a window's rounded corners. They are made paper
+    // once its grey is known, not black marks in the corners of a page that fills the window; and
+    // a pixel partly drawn, its corner's edge, is its own grey, not that grey darkened by its alpha.)
+    var clear: [Int] = []
+    colour.withUnsafeBufferPointer { bgra in
+        grey.withUnsafeMutableBufferPointer { out in
+            for i in 0..<(width * height) {
+                let alpha = Int(bgra[4 * i + 3])
+                if alpha < 128 { clear.append(i) }
+                let blue = Int(bgra[4 * i]) * 29
+                let green = Int(bgra[4 * i + 1]) * 150
+                let red = Int(bgra[4 * i + 2]) * 77
+                let lightness = (blue + green + red) >> 8
+                out[i] = UInt8(alpha >= 255 || alpha == 0 ? lightness : min(255, lightness * 255 / alpha))
+            }
+        }
+    }
+    colour = []
+    // Pixels a point (1, but for a frame of a fraction of a point).
+    let sx = CGFloat(width) / frame.width
+    let sy = CGFloat(height) / frame.height
+    /// A box in screen points as the pixels of `grey` it covers, clipped to them.
+    func pixels(_ box: CGRect) -> (x: Range<Int>, y: Range<Int>) {
+        let x0 = min(max(Int(((box.minX - frame.minX) * sx).rounded(.down)), 0), width)
+        let x1 = min(max(Int(((box.maxX - frame.minX) * sx).rounded(.up)), x0), width)
+        let y0 = min(max(Int(((box.minY - frame.minY) * sy).rounded(.down)), 0), height)
+        let y1 = min(max(Int(((box.maxY - frame.minY) * sy).rounded(.up)), y0), height)
+        return (x0..<x1, y0..<y1)
+    }
+    /// Pixels of `grey` back in screen points.
+    func points(x: Range<Int>, y: Range<Int>) -> CGRect {
+        CGRect(x: frame.minX + CGFloat(x.lowerBound) / sx, y: frame.minY + CGFloat(y.lowerBound) / sy,
+               width: CGFloat(x.count) / sx, height: CGFloat(y.count) / sy)
+    }
+
+    // The paper's grey: the commonest inside the lines the page keeps.
+    let kept = lines.filter { hasLetterOrDigit($0.text) }
+    var counts = [Int](repeating: 0, count: 256)
+    for line in kept {
+        let box = pixels(line.box)
+        for y in box.y { for x in box.x { counts[Int(grey[y * width + x])] += 1 } }
+    }
+    let total = counts.reduce(0, +)
+    guard total > 0 else { return nil }
+    var peak = 0
+    var peakCount = -1
+    for v in 0..<256 {
+        let around = counts[max(0, v - 4)...min(255, v + 4)].reduce(0, +)
+        if around > peakCount { (peak, peakCount) = (v, around) }
+    }
+    guard Double(peakCount) >= PAPER_PEAK * Double(total) else { return nil }
+    var weighted = 0
+    for v in max(0, peak - 4)...min(255, peak + 4) { weighted += v * counts[v] }
+    let paperGrey = Int((Double(weighted) / Double(max(peakCount, 1))).rounded())
+    func isPaper(_ v: UInt8) -> Bool { abs(Int(v) - paperGrey) <= PAPER_NEAR }
+    func isMarked(_ v: UInt8) -> Bool { abs(Int(v) - paperGrey) > MARK_FAR }
+    let paperByte = UInt8(paperGrey)
+    for i in clear { grey[i] = paperByte }
+
+    // The paper: the columns that are paper over the rows of the lines sitting on it, then the
+    // rows that are paper over those columns, each the run with most of those lines in it (a page
+    // beside or under the next, in a viewer that shows two); then the columns again over the
+    // paper's own rows, and its rows over those, until it holds (three goes at most). Over the rows
+    // from a viewer's bars to the page's last line, a bar as light as the paper (a browser's white
+    // tab and toolbar over its dark PDF viewer) can make a column of the dark viewer beside the
+    // page count as paper; over the page's own rows it does not. Told only when one of its edges
+    // is inside the window: a page that fills it shows none of them.
+    let sitting = kept.map { pixels($0.box) }.filter { box in
+        var paper = 0
+        for y in box.y { for x in box.x where isPaper(grey[y * width + x]) { paper += 1 } }
+        return box.x.count * box.y.count > 0 && Double(paper) >= PAPER_SITS * Double(box.x.count * box.y.count)
+    }
+    func overlap(_ a: Range<Int>, _ b: Range<Int>) -> Int { max(0, min(a.upperBound, b.upperBound) - max(a.lowerBound, b.lowerBound)) }
+    /// Of `runs`, the one with most of the sitting lines in it (`weight`), if any has some.
+    func heaviest(_ runs: [Range<Int>], _ weight: (Range<Int>) -> Int) -> Range<Int>? {
+        runs.map { ($0, weight($0)) }.filter { $0.1 > 0 }.max { $0.1 < $1.1 }?.0
+    }
+    var paper: (x: Range<Int>, y: Range<Int>)?
+    if let top = sitting.map(\.y.lowerBound).min(), let bottom = sitting.map(\.y.upperBound).max(), bottom > top {
+        var band = top..<bottom
+        for _ in 0..<3 {
+            var colPaper = [Int](repeating: 0, count: width)
+            for y in band { for x in 0..<width where isPaper(grey[y * width + x]) { colPaper[x] += 1 } }
+            let paperCols = trueRuns(colPaper.map { Double($0) >= PAPER_EDGE_SHARE * Double(band.count) })
+            guard let across = heaviest(paperCols, { run in sitting.reduce(0) { $0 + overlap($1.x, run) * overlap($1.y, band) } })
+            else { break }
+            var rowPaper = [Int](repeating: 0, count: height)
+            for y in 0..<height { for x in across where isPaper(grey[y * width + x]) { rowPaper[y] += 1 } }
+            let paperRows = trueRuns(rowPaper.map { Double($0) >= PAPER_EDGE_SHARE * Double(across.count) })
+            guard let down = heaviest(paperRows, { run in sitting.reduce(0) { $0 + overlap($1.y, run) * overlap($1.x, across) } })
+            else { break }
+            let held = paper.map { $0.x == across && $0.y == down } ?? false
+            paper = (across, down)
+            if held || down == band { break }
+            band = down
+        }
+        if let found = paper, found.x == 0..<width, found.y == 0..<height { paper = nil }
+    }
+
+    // The words left out (as paper), each box WORD_PAD bigger: the words of a line, or the whole
+    // line when it has none or one of them is guessed. A word with no letter or digit is not one
+    // the page keeps: a blank's underscores ("____") stay, and are found as a rule.
+    for line in kept {
+        let boxes: [CGRect]
+        if let found = line.words, !found.contains(where: \.guessed) {
+            boxes = found.filter { hasLetterOrDigit($0.text) }.map(\.box)
+        } else {
+            boxes = [line.box]
+        }
+        for box in boxes {
+            let out = pixels(box.insetBy(dx: -WORD_PAD, dy: -WORD_PAD))
+            for y in out.y { for x in out.x { grey[y * width + x] = paperByte } }
+        }
+    }
+    let region = paper ?? (0..<width, 0..<height)
+
+    // The rules: per row, every run of marked pixels long enough; runs in rows one under another
+    // that overlap are one, kept when RULE_THICK rows thick or less.
+    let minRun = max(Int((RULE_MIN * sx).rounded()), Int((RULE_MIN_SHARE * CGFloat(region.x.count)).rounded()), 1)
+    var groups: [(x: Range<Int>, y: Range<Int>)] = []
+    var open: [Int] = []
+    for y in region.y {
+        var still: [Int] = []
+        var start = -1
+        for x in region.x.lowerBound...region.x.upperBound {
+            let on = x < region.x.upperBound && isMarked(grey[y * width + x])
+            if on && start < 0 { start = x }
+            guard !on, start >= 0 else { continue }
+            if x - start >= minRun {
+                let run = start..<x
+                if let k = open.first(where: { overlap(groups[$0].x, run) > 0 }) {
+                    let x0 = min(groups[k].x.lowerBound, run.lowerBound)
+                    groups[k] = (x0..<max(groups[k].x.upperBound, run.upperBound), groups[k].y.lowerBound..<(y + 1))
+                    if !still.contains(k) { still.append(k) }
+                } else {
+                    groups.append((run, y..<(y + 1)))
+                    still.append(groups.count - 1)
+                }
+            }
+            start = -1
+        }
+        open = still
+    }
+    let rules = groups.filter { CGFloat($0.y.count) <= CGFloat(RULE_THICK) * sy }.prefix(RULES_KEPT).map { points(x: $0.x, y: $0.y) }
+
+    // The ink: a cell is drawn on when enough of its pixels are marked (the words are paper now).
+    let cell = max(1, Int((CGFloat(INK_CELL) * sx).rounded()))
+    let cols = min(INK_CELLS_MOST, (region.x.count + cell - 1) / cell)
+    let rows = min(INK_CELLS_MOST, (region.y.count + cell - 1) / cell)
+    var marked = [Int](repeating: 0, count: cols * rows)
+    for y in region.y.lowerBound..<min(region.y.upperBound, region.y.lowerBound + rows * cell) {
+        let r = (y - region.y.lowerBound) / cell
+        for x in region.x.lowerBound..<min(region.x.upperBound, region.x.lowerBound + cols * cell) where isMarked(grey[y * width + x]) {
+            marked[r * cols + (x - region.x.lowerBound) / cell] += 1
+        }
+    }
+    var bits = [UInt8](repeating: 0, count: (cols * rows + 7) / 8)
+    for r in 0..<rows {
+        let tall = min(cell, region.y.count - r * cell)
+        for c in 0..<cols {
+            let wide = min(cell, region.x.count - c * cell)
+            let i = r * cols + c
+            if Double(marked[i]) > INK_SHARE * Double(tall * wide) { bits[i >> 3] |= UInt8(1 << (i & 7)) }
+        }
+    }
+    let origin = points(x: region.x, y: region.y)
+    return PageGeometry(paper: paper.map { points(x: $0.x, y: $0.y) }, rules: Array(rules),
+                        ink: InkGrid(x: Double(origin.minX), y: Double(origin.minY), cols: cols, rows: rows, bits: bits))
+}
+
+/// A page's geometry as the read sends it ("paper" only when told).
+func geometryFields(_ geometry: PageGeometry) -> [String: Any] {
+    var fields: [String: Any] = [
+        "rules": geometry.rules.map { boxFields($0) },
+        "ink": [
+            "x": geometry.ink.x, "y": geometry.ink.y, "cell": INK_CELL, "cols": geometry.ink.cols, "rows": geometry.ink.rows,
+            "bits": Data(geometry.ink.bits).base64EncodedString(),
+        ] as [String: Any],
+    ]
+    if let paper = geometry.paper { fields["paper"] = boxFields(paper) }
+    return fields
 }
 
 // MARK: - Has it changed?
@@ -1037,21 +1484,27 @@ func turn(id: Int, _ asked: Turn) async {
         emit(["id": id, "ev": "error", "code": "window_gone"])
         return
     }
+    // (through the handle kept, or one asked for now and kept: the careful read after the turn
+    // pictures through it too, throughFilter)
+    let config = thumbnailConfig(for: target.frame)
     let filter: SCContentFilter
+    var before: [UInt8]
     do {
-        guard let window = try await shareableWindow(target.id) else {
+        guard let first = try await throughFilter(target.id, frame: target.frame, { ($0, try await thumbnail($0, config)) }) else {
             emit(["id": id, "ev": "error", "code": "window_gone"])
             return
         }
-        filter = SCContentFilter(desktopIndependentWindow: window)
+        guard let thumb = first.1 else {
+            emit(["id": id, "ev": "error", "code": onScreenWindow(target.id) == nil ? "window_gone" : "capture_failed"])
+            return
+        }
+        filter = first.0
+        before = thumb
     } catch {
-        log("[screen] capture failed: \(error.localizedDescription)")
-        emit(["id": id, "ev": "error", "code": "capture_failed"])
-        return
-    }
-    let config = thumbnailConfig(for: target.frame)
-    guard var before = try? await thumbnail(filter, config) else {
-        emit(["id": id, "ev": "error", "code": onScreenWindow(target.id) == nil ? "window_gone" : "capture_failed"])
+        // (the picture through a fresh handle failing: the window going, or capture refused)
+        let code = onScreenWindow(target.id) == nil ? "window_gone" : "capture_failed"
+        if code == "capture_failed" { log("[screen] capture failed: \(error.localizedDescription)") }
+        emit(["id": id, "ev": "error", "code": code])
         return
     }
 
@@ -1158,11 +1611,13 @@ func startTurn(id: Int, _ asked: Turn) {
     defer { turnsLock.unlock() }
     // The companion's watch for a new look (observe) leaves the window alone meanwhile: the
     // lesson's own turn is no page the student turned. (Not for a wait for it to be still: no turn,
-    // and a slide the student changes just after is to be seen at once.)
-    if !asked.still { turning(asked.window, true) }
+    // and a slide the student changes just after is to be seen at once.) Its keys are no
+    // student's either (keyTick); a wait for the student's own turn posts none.
+    let keys = asked.how == "key"
+    if !asked.still { turning(asked.window, true, keys: keys) }
     turnTasks[id] = Task {
         await turn(id: id, asked)
-        if !asked.still { turning(asked.window, false) }
+        if !asked.still { turning(asked.window, false, keys: keys) }
         _ = takeTurn(id)
     }
 }
@@ -1216,6 +1671,41 @@ func watchedOnTop(_ point: CGPoint, _ window: CGWindowID, now: TimeInterval) -> 
     return true
 }
 
+/// The points a mouse wheel's line is taken as until the read after the scroll says better: about
+/// what a browser scrolls a line by. The page learns each app's own step from the lines said.
+let WHEEL_LINE_PT = 40.0
+
+/// What one wheel event over a window says ("scroll"): its content moved up by `dy` points and left
+/// by `dx`; `lines`, a mouse wheel's lines in dy's sense (0 for a trackpad, whose deltas are points
+/// already); and whether it is that window's scroll for the watch (`scrolls`: scrolledAt, which
+/// keeps the new look it settles into from being said). Only a move up or down is (the founder,
+/// 2026-10-28: the tutor over another app should be "very accurate in the way it points at
+/// things"): a pan sideways across a zoomed page, or a swipe that turns a page, would otherwise
+/// leave the lesson where the words were, the app told of no new look.
+struct WheelStep {
+    let dy: Double
+    let dx: Double
+    let lines: Double
+    let scrolls: Bool
+}
+
+/// The event's own deltas (`precise`: hasPreciseScrollingDeltas, a trackpad's or a Magic Mouse's)
+/// as a WheelStep.
+func wheelStep(deltaY: Double, deltaX: Double, precise: Bool) -> WheelStep {
+    let point = precise ? 1 : WHEEL_LINE_PT
+    let dy = deltaY == 0 ? 0 : -deltaY * point
+    let dx = deltaX == 0 ? 0 : -deltaX * point
+    let lines = precise || deltaY == 0 ? 0 : -deltaY
+    return WheelStep(dy: dy, dx: dx, lines: lines, scrolls: dy != 0)
+}
+
+/// When the watch is to take `step`, heard `now`, as its window's scroll (scrolledAt: the new look
+/// it settles into is told already), or nil: a pan or a swipe sideways, or an event that moved
+/// nothing, whose new look is said (installWatch).
+func wheelScrolledAt(_ step: WheelStep, now: TimeInterval) -> TimeInterval? {
+    step.scrolls ? now : nil
+}
+
 func installWatch() {
     guard !watching else { return }
     watching = true
@@ -1228,10 +1718,11 @@ func installWatch() {
             // pointer): how far its content moved, in points, so the lesson's marks move with it
             // as they would over a PDF in the app. Up is positive: the window went down its
             // document. A trackpad gives points; a wheel gives lines, which a browser scrolls
-            // about 40 points each. The read after the scroll stops corrects what this is off by.
-            // Sideways too (dx, left positive): a swipe that turns a page in some readers.
-            // With the companion on, whichever window is under the cursor (overAt), never
-            // Tutornote's own.
+            // about WHEEL_LINE_PT points each, and which are said too ("lines"), so the page can
+            // learn the app's own step from the read after the scroll stops, which corrects what
+            // this is off by (wheelStep). Sideways too (dx, left positive): a pan across a zoomed
+            // page, or a swipe that turns a page in some readers. With the companion on,
+            // whichever window is under the cursor (overAt), never Tutornote's own.
             guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != POSTED_BY_US else { return }
             let window: CGWindowID
             if companionOn {
@@ -1241,14 +1732,16 @@ func installWatch() {
                 guard let only = watched, watchedOnTop(point, only, now: now) else { return }
                 window = only
             }
-            let dy = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 40
-            let dx = event.hasPreciseScrollingDeltas ? event.scrollingDeltaX : event.scrollingDeltaX * 40
-            if dy != 0 || dx != 0 {
-                emit(["ev": "scroll", "dy": Double(-dy), "dx": Double(-dx), "momentum": !event.momentumPhase.isEmpty, "window": Int(window)])
+            let step = wheelStep(deltaY: Double(event.scrollingDeltaY), deltaX: Double(event.scrollingDeltaX), precise: event.hasPreciseScrollingDeltas)
+            if step.dy != 0 || step.dx != 0 {
+                emit(["ev": "scroll", "dy": step.dy, "dx": step.dx, "lines": step.lines, "momentum": !event.momentumPhase.isEmpty, "window": Int(window)])
             }
             // (told already: the new look it settles into is no "changed". The companion off too: the
-            // lesson's window is observed for every lesson now)
-            scrolled(window, at: now)
+            // lesson's window is observed for every lesson now. Only a move up or down is: a pan
+            // or a swipe sideways, and an event that moved nothing (fingers set down or lifted),
+            // leave the new look to be said, as a key's is; and in a window observed as turning by
+            // the page, no wheel explains one: scrollExplains)
+            if let at = wheelScrolledAt(step, now: now) { scrolled(window, at: at) }
             burst(window)
             return
         }
@@ -1283,7 +1776,13 @@ func installWatch() {
                     burst(top.id)
                 }
             } else if !companionOn, let window = watched, watchedOnTop(point, window, now: now), let frame = onTopAt?.frame {
+                // (the companion off: the lesson's window alone, so a click that turns a page in
+                // Kindle's or Books' margin, on its release, hides what the lesson wrote at once,
+                // and the new look is said as soon as it is still. Its tap's "moved" is still
+                // judged on the picture from the press)
+                emit(["ev": "press", "x": Double(point.x), "y": Double(point.y), "window": Int(window)])
                 watchPress = (window, Task { await quickThumbnail(window, frame: frame) })
+                burst(window)
             }
             return
         }
@@ -1362,6 +1861,14 @@ func installWatch() {
   shown. It says "ident" as the watch starts, then only when any of that changed; an app coming
   to the front is looked at at once (installWatch), not at the next tick. A title that changed has the watch for a new look ("observe") look often for a
   moment, as a press does: the new page is said as soon as it is still.
+  It says where the watched window is too ("frame", its own entry's bounds), whichever app is in
+  front: a window dragged by its title bar changes no pixel of it, so no new look is ever said
+  for it, and the lesson's marks would stay where its words were (the founder, 2026-10-28: the
+  tutor over another app "should be very accurate in the way it points at things"). "topFrame"
+  says as much only while its app is in front with that window its front one; a Cmd drag of a
+  window behind, or one under another of its app's, is said by "frame" alone. A drag is said on
+  every tick while it goes, as "topFrame" already was; the app (screenTeach.ts followFrame) moves
+  the lesson with it.
 
   One window list a tick (about half a millisecond), and the watched window's own entry. While a
   lesson watches a window its talk chord is watched too, which keeps the helper out of App Nap
@@ -1383,13 +1890,15 @@ struct IdentWindow: Equatable {
     let frame: CGRect
 }
 
-/// What "ident" says: the watched window's title and whether it is on the screen; its app's front
-/// ordinary window while that app is in front (`top`); another app's while that one is (`other`);
-/// and whether secure input is on (`secure`).
+/// What "ident" says: the watched window's title, whether it is on the screen and where it is
+/// (`frame`, nil once it is listed no more); its app's front ordinary window while that app is in
+/// front (`top`); another app's while that one is (`other`); and whether secure input is on
+/// (`secure`).
 struct IdentLook: Equatable {
     let window: CGWindowID
     let title: String
     let onScreen: Bool
+    let frame: CGRect?
     let top: IdentWindow?
     let other: IdentWindow?
     let secure: Bool
@@ -1425,6 +1934,7 @@ func identLook(window: CGWindowID, own: [String: Any]?, pid: pid_t?, list: [[Str
                secure: Bool = false) -> IdentLook {
     let title = own?[kCGWindowName as String] as? String ?? ""
     let onScreen = (own?[kCGWindowIsOnscreen as String] as? Bool) == true
+    let frame = own.flatMap(target(from:))?.frame
     var top: IdentWindow?
     var other: IdentWindow?
     if let front {
@@ -1434,7 +1944,7 @@ func identLook(window: CGWindowID, own: [String: Any]?, pid: pid_t?, list: [[Str
             other = frontWindow(of: front, in: list)
         }
     }
-    return IdentLook(window: window, title: title, onScreen: onScreen, top: top, other: other, secure: secure)
+    return IdentLook(window: window, title: title, onScreen: onScreen, frame: frame, top: top, other: other, secure: secure)
 }
 
 func frameFields(_ frame: CGRect) -> [String: Double] {
@@ -1458,6 +1968,7 @@ func identFields(_ look: IdentLook, appOf: (pid_t) -> (name: String?, bundle: St
         "topTitle": look.top?.title ?? "",
         "secure": look.secure,
     ]
+    if let frame = look.frame { fields["frame"] = frameFields(frame) }
     if let top = look.top { fields["topFrame"] = frameFields(top.frame) }
     if let other = look.other {
         let app = appOf(other.pid)
@@ -1560,11 +2071,27 @@ func identSelfTest(_ check: (String, Bool) -> Void) {
     let retitled = identLook(window: 3545, own: listed(3545, pid: 50, page, title: "Delta.pdf"), pid: 50, list: list, front: 50, otherTold: false)
     check("the same look again is not said; another title, or another window in front, is",
           again == inFront && retitled != inFront && elsewhere != inFront)
+    // A drag moves the window and changes nothing else: said on every tick while it goes, its app
+    // in front or behind (a Cmd drag), and gone with the window.
+    let dragged = listed(3545, pid: 50, page.offsetBy(dx: 40, dy: 25), title: "Alpha.pdf")
+    let draggedList = Array(list.dropLast()) + [dragged]
+    let movedFront = identLook(window: 3545, own: dragged, pid: 50, list: draggedList, front: 50, otherTold: false)
+    let movedBehind = identLook(window: 3545, own: dragged, pid: 50, list: draggedList, front: 60, otherTold: true)
+    let saidInFront = inFront.frame == page && movedFront != inFront && movedFront.frame == page.offsetBy(dx: 40, dy: 25)
+    let saidBehind = movedBehind != elsewhere && movedBehind.top == nil && movedBehind.frame?.minX == 42
+    check("a drag of the watched window is a change, its frame where it went, its app in front or behind",
+          saidInFront && saidBehind && gone.frame == nil)
+    let movedFields = identFields(movedBehind) { _ in ("Bravo", "com.example.bravo") }
+    let movedFrame = movedFields["frame"] as? [String: Double]
+    let movedAt = movedFrame?["x"] == 42 && movedFrame?["y"] == 69 && movedFrame?["w"] == 1800
+    check("ident says the watched window's frame, with no top while its app is behind",
+          movedAt && movedFields["topFrame"] == nil && identFields(gone)["frame"] == nil && JSONSerialization.isValidJSONObject(movedFields))
     let fields = identFields(inFront)
     check("ident says the window, its title, on screen, top and its title and frame, and no other",
           fields["ev"] as? String == "ident" && fields["window"] as? Int == 3545 && fields["onScreen"] as? Bool == true
             && fields["top"] as? Int == 3546 && fields["topTitle"] as? String == "Charlie.pdf"
             && (fields["topFrame"] as? [String: Double])?["w"] == 1600 && fields["other"] == nil
+            && (fields["frame"] as? [String: Double])?["h"] == 1125
             && fields["secure"] as? Bool == false && JSONSerialization.isValidJSONObject(fields))
     // Secure input going on or off is said too: nothing is read for another document meanwhile.
     let secured = identLook(window: 3545, own: lesson, pid: 50, list: list, front: 50, otherTold: false, secure: true)
@@ -2441,33 +2968,65 @@ func isPointingHand(_ cursor: NSCursor?) -> Bool {
 */
 let FILTER_KEEP_S: TimeInterval = 10
 let filterLock = NSLock()
-var keptFilters: [CGWindowID: (filter: SCContentFilter, at: TimeInterval)] = [:]
+var keptFilters: [CGWindowID: (filter: SCContentFilter, size: CGSize, at: TimeInterval)] = [:]
 
-/// The handle kept for `id`, while it is fresh; `filter` nil forgets it, else keeps it from `now`.
-func keptFilter(_ id: CGWindowID, now: TimeInterval) -> SCContentFilter? {
+/// The handle kept for `id`, while it is fresh, with the window's size as it was made for it.
+func keptFilter(_ id: CGWindowID, now: TimeInterval) -> (filter: SCContentFilter, size: CGSize)? {
     filterLock.lock()
     defer { filterLock.unlock() }
     guard let kept = keptFilters[id], now - kept.at < FILTER_KEEP_S else { return nil }
-    return kept.filter
+    return (kept.filter, kept.size)
 }
 
-func keepFilter(_ id: CGWindowID, _ filter: SCContentFilter?, now: TimeInterval) {
+/// `filter` nil forgets the handle kept for `id`, else keeps it from `now`, made for a window of `size`.
+func keepFilter(_ id: CGWindowID, _ filter: SCContentFilter?, size: CGSize = .zero, now: TimeInterval) {
     filterLock.lock()
     defer { filterLock.unlock() }
     keptFilters = keptFilters.filter { now - $0.value.at < 6 * FILTER_KEEP_S }
-    keptFilters[id] = filter.map { ($0, now) }
+    keptFilters[id] = filter.map { ($0, size, now) }
 }
 
 func cachedFilter(_ id: CGWindowID, fresh: Bool = false) async throws -> SCContentFilter? {
     let now = ProcessInfo.processInfo.systemUptime
-    if !fresh, let kept = keptFilter(id, now: now) { return kept }
+    if !fresh, let kept = keptFilter(id, now: now) { return kept.filter }
     guard let window = try await shareableWindow(id) else {
         keepFilter(id, nil, now: now)
         return nil
     }
     let filter = SCContentFilter(desktopIndependentWindow: window)
-    keepFilter(id, filter, now: now)
+    keepFilter(id, filter, size: window.frame.size, now: now)
     return filter
+}
+
+/*
+  A read and a turn take the handle kept too (throughFilter): a lesson's turn asks for its own
+  afresh and keeps it, and the careful read after it, a moment later, pictures through that one.
+  Kept only while the window is still the size it had when the handle was made: the size
+  ScreenCaptureKit listed it at then (SCWindow's frame, in the same points as the window lists'
+  frames; not the handle's contentRect, which Apple's header calls only the content's size, and
+  which was never seen here to agree with a window's frame, its shadow in or out). A window resized
+  since has a new one asked for, as one whose picture through the kept handle fails. A handle kept
+  with no size is taken as the glances always took it.
+*/
+/// How far a window's size may be from its kept handle's and still be pictured through it, in points.
+let FILTER_SIZE_SLACK: CGFloat = 1
+
+/// Whether a handle made for a window of `kept` size still fits it at `frame`.
+func filterFits(_ kept: CGSize, _ frame: CGRect) -> Bool {
+    if kept.width <= 0 || kept.height <= 0 { return true }
+    return abs(kept.width - frame.width) <= FILTER_SIZE_SLACK && abs(kept.height - frame.height) <= FILTER_SIZE_SLACK
+}
+
+/// `take` done through the window `id`'s kept handle while it fits `frame`, else (or when that
+/// fails) through one asked for now, and kept. Nil when ScreenCaptureKit no longer lists the
+/// window; throws when `take` fails through the fresh handle too.
+func throughFilter<T>(_ id: CGWindowID, frame: CGRect, _ take: (SCContentFilter) async throws -> T) async throws -> T? {
+    if let kept = keptFilter(id, now: ProcessInfo.processInfo.systemUptime), filterFits(kept.size, frame),
+       let done = try? await take(kept.filter) {
+        return done
+    }
+    guard let fresh = try await cachedFilter(id, fresh: true) else { return nil }
+    return try await take(fresh)
 }
 
 /// A thumbnail of the window `id` at `frame` (its size decides the thumbnail's), or nil.
@@ -2490,11 +3049,15 @@ func quickThumbnail(_ id: CGWindowID, frame: CGRect) async -> [UInt8]? {
   is going on, and for TURN_QUIET_S after (the lesson reads it then itself).
 
   A new look that a wheel scroll of the window explains (one began within SCROLL_EXPLAINS_S of
-  the student's last scroll there, which the app was told: "scroll") is no "changed": the app
-  follows the scroll itself, and a "changed" would hide the lesson's marks for a careful reread
-  after every scroll. Keys and a dragged scroll bar send no wheel, and are said. A window that
-  keeps changing (a video, typing) is looked at often for CHANGING_BURST_S at most, then twice a
-  second until it is still again.
+  the student's last scroll up or down there, which the app was told: "scroll") is no "changed":
+  the app follows the scroll itself, and a "changed" would hide the lesson's marks for a careful
+  reread after every scroll. Keys and a dragged scroll bar send no wheel, and are said; so is a
+  sideways pan or swipe (wheelStep), which moves no line up or down. In a window the app observes
+  as turning by the page ("page": a lesson in Kindle or Books, or in an app a key turned) no wheel
+  explains a new look: a wheel or a swipe there turns a whole page, which nothing follows from the
+  scroll, and the page it turned is said as a key's is. A key pressed in the watched window's app
+  bursts it at once (keyTick). A window that keeps changing (a video, typing) is looked at often
+  for CHANGING_BURST_S at most, then twice a second until it is still again.
 */
 let OBSERVE_IDLE_MS = 500
 let BURST_S: TimeInterval = 1.5
@@ -2518,15 +3081,21 @@ var firstLook: [CGWindowID: [UInt8]] = [:]
 var toldLook: [CGWindowID: [UInt8]] = [:]
 var differentSince: [CGWindowID: TimeInterval] = [:]
 var scrolledAt: [CGWindowID: TimeInterval] = [:]
+/// The windows observed now that turn by the page ("observe"'s "page").
+var pagedObserved: Set<CGWindowID> = []
 /// The windows no longer watched whose looks are kept, the latest last.
 var unobserved: [CGWindowID] = []
-/// A lesson's turns going on, by window, and when the last one of each ended.
+/// A lesson's turns going on, by window, and when the last one of each ended; and the same for
+/// its turns by a key alone, whose keys are no student's (keyTick).
 var turnsOn: [CGWindowID: Int] = [:]
 var turnEnded: [CGWindowID: TimeInterval] = [:]
+var keyTurnsOn: [CGWindowID: Int] = [:]
+var keyTurnEnded: [CGWindowID: TimeInterval] = [:]
 
-/// Whether a new look that began at `since` is the wheel scroll last heard at `scrolled`'s.
-func scrollExplains(since: TimeInterval, scrolled: TimeInterval?) -> Bool {
-    guard let scrolled else { return false }
+/// Whether a new look that began at `since` is the wheel scroll last heard at `scrolled`'s. Never
+/// in a window that turns by the page (`page`): a wheel or a swipe there turns a whole page.
+func scrollExplains(since: TimeInterval, scrolled: TimeInterval?, page: Bool = false) -> Bool {
+    guard !page, let scrolled else { return false }
     return scrolled >= since - SCROLL_EXPLAINS_S
 }
 
@@ -2535,14 +3104,21 @@ func keepsBursting(since: TimeInterval, now: TimeInterval) -> Bool {
     now - since < CHANGING_BURST_S
 }
 
-func turning(_ window: CGWindowID, _ on: Bool) {
+/// A lesson's turn of `window` begins (`on`) or ends; `keys`: one that presses keys.
+func turning(_ window: CGWindowID, _ on: Bool, keys: Bool = false) {
     observeLock.lock()
     defer { observeLock.unlock() }
     if on {
         turnsOn[window, default: 0] += 1
+        if keys { keyTurnsOn[window, default: 0] += 1 }
     } else {
+        let now = ProcessInfo.processInfo.systemUptime
         turnsOn[window] = max(0, (turnsOn[window] ?? 1) - 1)
-        turnEnded[window] = ProcessInfo.processInfo.systemUptime
+        turnEnded[window] = now
+        if keys {
+            keyTurnsOn[window] = max(0, (keyTurnsOn[window] ?? 1) - 1)
+            keyTurnEnded[window] = now
+        }
     }
 }
 
@@ -2581,9 +3157,11 @@ func scrolled(_ window: CGWindowID, at time: TimeInterval) {
     observeLock.unlock()
 }
 
-func observeWindows(_ windows: [CGWindowID]) {
+/// Watch `windows` (two at most) for a new look; `paged`: those of them that turn by the page.
+func observeWindows(_ windows: [CGWindowID], paged: Set<CGWindowID> = []) {
     observeLock.lock()
     let kept = Array(windows.prefix(2))
+    pagedObserved = paged.intersection(kept)
     // (what is known about a window no longer watched goes, but how it last looked, for the
     // latest few: a helper that lives as long as the app would keep every window's otherwise)
     for gone in observed where !kept.contains(gone) {
@@ -2643,6 +3221,8 @@ func observeLoop() async {
     while !Task.isCancelled {
         let windows = observedNow()
         if windows.isEmpty { break }
+        // (a key just pressed in the lesson's app: its window is looked at in this tick)
+        await keyTick(windows)
         for window in windows {
             guard lookNow(window, now: ProcessInfo.processInfo.systemUptime), let target = onScreenWindow(window) else { continue }
             guard let look = await quickThumbnail(window, frame: target.frame) else { continue }
@@ -2675,8 +3255,9 @@ func looked(_ window: CGWindowID, _ look: [UInt8]) {
         if let previous, meanDifference(previous, look) < SETTLED_BELOW {
             toldLook[window] = look
             differentSince[window] = nil
-            // (a wheel scroll's new look: the app follows it from the scroll itself)
-            if !scrollExplains(since: since, scrolled: scrolledAt[window]) { settleMs = Int((now - since) * 1000) }
+            // (a wheel scroll's new look: the app follows it from the scroll itself; never a page
+            // turned by the wheel or a swipe in a window that turns by the page)
+            if !scrollExplains(since: since, scrolled: scrolledAt[window], page: pagedObserved.contains(window)) { settleMs = Int((now - since) * 1000) }
         } else if keepsBursting(since: since, now: now) {
             // Changing (a key turned the page, which nothing else hears): looked at often until
             // it is still, so the new page is said within a tenth of a second of settling. Not
@@ -2689,6 +3270,82 @@ func looked(_ window: CGWindowID, _ look: [UInt8]) {
     }
     observeLock.unlock()
     if let settleMs { emit(["ev": "changed", "window": Int(window), "settleMs": settleMs]) }
+}
+
+/*
+  A key pressed in the lesson's app (the founder, 2026-10-28: the tutor over another app should be
+  "super responsive"). The watch takes no key event, and a key sends no wheel, so a page turned or
+  scrolled by one (Page Down, an arrow, the space bar) was seen only at the window's next idle look,
+  up to OBSERVE_IDLE_MS later, with the lesson's ink left on where the words were meanwhile. Each
+  tick of the observe loop now asks when a key last went down (lastEventAt, as the talk chord does:
+  when, never which key), and one that went down less than KEY_FRESH_S before, with the watched
+  window's app in front and that window observed (keyBurstDue), bursts it: looked at every POLL_MS,
+  its new look is said as soon as it is still. The first key of a run is also said at once
+  ("keyed": the window alone), so the lesson can stop trusting its ink before the new look is in;
+  and while keys keep coming (a key held down, Page Down tapped, typing), one again at most every
+  KEY_RUN_S (keyRunStarts, from the last one said). The page trusts its ink again 700 ms after the
+  last "keyed" it heard (the web's inkUnsure.ts KEY_QUIET_MS), and a page a held key scrolls changes all the while,
+  with no "changed" until it is still: said once a run, its ink came back over words gone by.
+  Never the keys of a lesson's own turn by a key, posted while it goes on (keyIsOurs).
+*/
+/// (more than a tick's POLL_MS plus the looks it takes, up to two thumbnails during a burst, so no
+/// key falls between two ticks)
+let KEY_FRESH_S: TimeInterval = 0.3
+/// (a key said this long after the last one, plus a repeat's gap, plus a tick's look at it, comes
+/// well inside the page's 700 ms)
+let KEY_RUN_S: TimeInterval = 0.3
+/// When the last key said ("keyed") went down (seconds of uptime), or nil: none yet.
+var lastKeyTaken: TimeInterval?
+
+/// Whether a key that went down `sinceKey` seconds ago, with `frontPid`'s app in front, bursts the
+/// watched window, `windowPid`'s: only one just pressed, and only in that window's own app.
+func keyBurstDue(sinceKey: TimeInterval, frontPid: pid_t?, windowPid: pid_t?) -> Bool {
+    guard let frontPid, let windowPid, frontPid == windowPid else { return false }
+    return sinceKey >= 0 && sinceKey < KEY_FRESH_S
+}
+
+/// Whether the key that went down at `keyAt` is said ("keyed"), the last one said having gone down
+/// at `lastKeyAt` (nil: none yet): the first of a run, and one at most every KEY_RUN_S after it.
+func keyRunStarts(keyAt: TimeInterval, lastKeyAt: TimeInterval?) -> Bool {
+    guard let lastKeyAt else { return true }
+    return keyAt - lastKeyAt > KEY_RUN_S
+}
+
+/// Whether a key that went down at `keyAt` is one a lesson's own turn by a key posted in the
+/// window: such a turn going on (`turnsOn`), or one that ended at `turnEnded` or after it.
+func keyIsOurs(keyAt: TimeInterval, turnsOn: Int, turnEnded: TimeInterval?) -> Bool {
+    turnsOn > 0 || keyAt <= (turnEnded ?? -.infinity)
+}
+
+/// Whether the key that went down at `keyAt` in `window` is a lesson's own (keyIsOurs) and, when
+/// it is not, whether it is said ("keyed"), then the last one said. (A step of its own, as the
+/// watch's other locked ones are: an async function takes no NSLock in its body.)
+func keyTaken(_ window: CGWindowID, keyAt: TimeInterval) -> (posted: Bool, starts: Bool) {
+    observeLock.lock()
+    defer { observeLock.unlock() }
+    // (the keys a lesson's own turn posts, going on or done: none is the student's)
+    let posted = keyIsOurs(keyAt: keyAt, turnsOn: keyTurnsOn[window] ?? 0, turnEnded: keyTurnEnded[window])
+    let starts = !posted && keyRunStarts(keyAt: keyAt, lastKeyAt: lastKeyTaken)
+    if starts { lastKeyTaken = keyAt }
+    return (posted, starts)
+}
+
+/// One tick's look at the keys (observeLoop), `windows` being those observed now.
+func keyTick(_ windows: [CGWindowID]) async {
+    let now = ProcessInfo.processInfo.systemUptime
+    let keyAt = lastEventAt(.keyDown, now: now)
+    // (most ticks: no key just pressed, and nothing more is asked)
+    guard now - keyAt < KEY_FRESH_S else { return }
+    let (watchedNow, windowPid, frontPid) = await MainActor.run {
+        (watched, identPid, NSWorkspace.shared.frontmostApplication?.processIdentifier)
+    }
+    guard let window = watchedNow, windows.contains(window),
+          keyBurstDue(sinceKey: now - keyAt, frontPid: frontPid, windowPid: windowPid)
+    else { return }
+    let (posted, starts) = keyTaken(window, keyAt: keyAt)
+    guard !posted else { return }
+    burst(window)
+    if starts { emit(["ev": "keyed", "window": Int(window)]) }
 }
 
 /// The companion on (watching the cursor) or off. Main thread.
@@ -2731,8 +3388,9 @@ func setCompanion(_ on: Bool, stop: Set<CGWindowID>, privateApps: Set<String>, r
 
 // MARK: - Self test
 
-/// `--selftest`: the arithmetic the companion's taps and grounds rest on, on made-up pictures, and
-/// the words rule on columns it draws (no screen, no permission). True when all of it holds.
+/// `--selftest`: the arithmetic the companion's taps and grounds rest on, on made-up pictures, the
+/// words rule on columns it draws, a line's guessed words, and a page's paper, rules and ink on
+/// windows it draws (no screen, no permission). True when all of it holds.
 func selfTest() -> Bool {
     var ok = true
     func check(_ what: String, _ holds: Bool) {
@@ -2785,8 +3443,71 @@ func selfTest() -> Bool {
     check("a scroll still going explains it", scrollExplains(since: 10.0, scrolled: 10.4))
     check("a scroll 2 s before does not", !scrollExplains(since: 12.0, scrolled: 10.0))
     check("no scroll explains nothing", !scrollExplains(since: 10.0, scrolled: nil))
+    check("a scroll explains nothing in a window that turns by the page", !scrollExplains(since: 10.2, scrolled: 10.0, page: true))
     check("a window changing for 1 s is still looked at often", keepsBursting(since: 10, now: 11))
     check("one changing for 5 s goes back to twice a second", !keepsBursting(since: 10, now: 15))
+    // A wheel's step: what "scroll" says, and whether it is the window's scroll for the watch.
+    let wheel = wheelStep(deltaY: -3, deltaX: 0, precise: false)
+    check("a wheel's 3 lines on down the document are 120 points up, said as 3 lines", wheel.dy == 120 && wheel.dx == 0 && wheel.lines == 3 && wheel.scrolls)
+    check("a wheel's line back up is a line the other way", wheelStep(deltaY: 1, deltaX: 0, precise: false).lines == -1)
+    let pad = wheelStep(deltaY: -12.5, deltaX: 2, precise: true)
+    check("a trackpad's points are its own, with no lines", pad.dy == 12.5 && pad.dx == -2 && pad.lines == 0 && pad.scrolls)
+    let pan = wheelStep(deltaY: 0, deltaX: -30, precise: true)
+    check("a sideways pan is said, and is no scroll up or down", pan.dx == 30 && pan.dy == 0 && !pan.scrolls)
+    // (what installWatch stamps as the window's scroll, from wheelScrolledAt itself: a pan stamps
+    // nothing, so the new look it settles into is said; a trackpad's scroll down stamps its time)
+    check("so the new look it settles into is said", !scrollExplains(since: 10.2, scrolled: wheelScrolledAt(pan, now: 10.0)))
+    check("and a scroll up or down explains the new look it settles into", scrollExplains(since: 10.2, scrolled: wheelScrolledAt(pad, now: 10.0)))
+    check("a wheel event that moved nothing is no scroll", !wheelStep(deltaY: 0, deltaX: 0, precise: true).scrolls)
+    check("a sideways wheel has no lines", wheelStep(deltaY: 0, deltaX: 2, precise: false).lines == 0)
+    // A key just pressed in the watched window's app bursts it; the first of a run is said.
+    check("a key 0.1 s ago in the window's app bursts it", keyBurstDue(sinceKey: 0.1, frontPid: 678, windowPid: 678))
+    check("so does one 0.25 s ago, seen by a tick that took two looks", keyBurstDue(sinceKey: 0.25, frontPid: 678, windowPid: 678))
+    check("not one pressed in another app", !keyBurstDue(sinceKey: 0.1, frontPid: 679, windowPid: 678))
+    check("nor one 0.5 s ago", !keyBurstDue(sinceKey: 0.5, frontPid: 678, windowPid: 678))
+    check("nor with the window's app not known", !keyBurstDue(sinceKey: 0.1, frontPid: 678, windowPid: nil))
+    check("nor with no app in front", !keyBurstDue(sinceKey: 0.1, frontPid: nil, windowPid: 678))
+    check("the first key is said", keyRunStarts(keyAt: 10, lastKeyAt: nil))
+    // A key held down: the first press, then its repeats every 0.05 s after a 0.4 s wait. Said
+    // again at most every KEY_RUN_S while it is held (counted from the last one said, as keyTick
+    // keeps lastKeyTaken), so the page's 700 ms quiet never runs out while the page still moves.
+    var told = 0
+    var last: TimeInterval?
+    for keyAt in [10.0, 10.4, 10.45, 10.5, 10.55, 10.6, 10.65, 10.7, 10.75] where keyRunStarts(keyAt: keyAt, lastKeyAt: last) {
+        told += 1
+        last = keyAt
+    }
+    check("a key held down is said again while it is held", told == 3)
+    check("the same key seen on the next tick is not said again", !keyRunStarts(keyAt: 10.6, lastKeyAt: 10.6))
+    check("a key a second after the last is said again", keyRunStarts(keyAt: 11.6, lastKeyAt: 10.6))
+    // The keys a lesson's own turn by a key posts are never the student's (keyTick).
+    check("a key while a lesson's turn by a key goes on is ours", keyIsOurs(keyAt: 10, turnsOn: 1, turnEnded: nil))
+    check("so is one that went down before that turn ended", keyIsOurs(keyAt: 10, turnsOn: 0, turnEnded: 10.5))
+    check("not one after it ended", !keyIsOurs(keyAt: 11, turnsOn: 0, turnEnded: 10.5))
+    check("nor one with no turn by a key ever", !keyIsOurs(keyAt: 10, turnsOn: 0, turnEnded: nil))
+    // And the bookkeeping keyTick reads, on a made up window (nothing is observed in a selftest).
+    let turnedByUs: CGWindowID = 9_999_999
+    turning(turnedByUs, true, keys: true)
+    observeLock.lock()
+    let keysOn = keyTurnsOn[turnedByUs] ?? 0
+    observeLock.unlock()
+    turning(turnedByUs, false, keys: true)
+    observeLock.lock()
+    let keysOff = keyTurnsOn[turnedByUs] ?? 0
+    let keysEnded = keyTurnEnded[turnedByUs]
+    observeLock.unlock()
+    turning(turnedByUs, true)
+    observeLock.lock()
+    let scrollOn = keyTurnsOn[turnedByUs] ?? 0
+    turnsOn[turnedByUs] = nil
+    turnEnded[turnedByUs] = nil
+    keyTurnsOn[turnedByUs] = nil
+    keyTurnEnded[turnedByUs] = nil
+    observeLock.unlock()
+    check("a turn by a key counts while it goes on", keysOn == 1)
+    check("and once it ends, the keys before its end are ours, none after",
+          keysOff == 0 && keysEnded.map { keyIsOurs(keyAt: $0 - 0.01, turnsOn: keysOff, turnEnded: $0) && !keyIsOurs(keyAt: $0 + 0.5, turnsOn: keysOff, turnEnded: $0) } == true)
+    check("a turn by a scroll counts no keys", scrollOn == 0)
 
     // Kindle full screen as in the founder's test: a window at (0, 36), 1512 x 946 points, its
     // thumbnail 256 x 160; a white page in columns 72 to 186 on black, a line of text every 5
@@ -2878,7 +3599,15 @@ func selfTest() -> Bool {
             && middleAwayDifference(page, middleTurned, width: width, rows: 0...5) > CHANGED_ABOVE)
     check("isPointingHand(nil) is false", !isPointingHand(nil))
     check("the pointing hand is the hand, and the arrow is not", isPointingHand(NSCursor.pointingHand) && !isPointingHand(NSCursor.arrow))
+    let kept = CGSize(width: 800, height: 600)
+    check("a kept handle fits its window where it is, a point either way, and when it says no size",
+          filterFits(kept, CGRect(x: 300, y: 90, width: 800.5, height: 599))
+            && filterFits(.zero, CGRect(x: 0, y: 0, width: 1200, height: 900)))
+    check("a window resized since its handle was kept has a new one",
+          !filterFits(kept, CGRect(x: 0, y: 0, width: 820, height: 600)) && !filterFits(kept, CGRect(x: 0, y: 0, width: 800, height: 540)))
     textSelfTest(check)
+    wordsSelfTest(check)
+    geometrySelfTest(check)
     holdSelfTest(check)
     identSelfTest(check)
     chordSelfTest(check)
@@ -3051,6 +3780,236 @@ func textSelfTest(_ check: (String, Bool) -> Void) {
           judge(column(short), column(short, shift: -23), at: shortTap, awayChanged: true)?.words == "kept")
     check("a short row found again without its neighbours is gone",
           judge(column(short), column(shortTurned), at: shortTap, awayChanged: true)?.words == "gone")
+}
+
+/*
+  A line's words when Vision cannot place one of them (wordBoxes), on a made-up line of made-up
+  words: boxes laid out a character at a time across the line, as Vision's are (a little bigger
+  than their letters), with one word's withheld or given the whole line, as Vision does.
+*/
+func wordsSelfTest(_ check: (String, Bool) -> Void) {
+    let string = "river market garden window paper"
+    let line = CGRect(x: 0.1, y: 0.5, width: 0.6, height: 0.02)
+    let each = line.width / CGFloat(string.count)
+    let pad: CGFloat = 0.002
+    /// Where a word really is: its characters' place along the line (right to left when `leftwards`).
+    func laid(_ range: Range<String.Index>, leftwards: Bool = false) -> CGRect {
+        let from = CGFloat(string.distance(from: string.startIndex, to: range.lowerBound))
+        let to = CGFloat(string.distance(from: string.startIndex, to: range.upperBound))
+        let x = leftwards ? line.maxX - to * each : line.minX + from * each
+        return CGRect(x: x - pad, y: line.minY + 0.001, width: (to - from) * each + 2 * pad, height: line.height - 0.002)
+    }
+    func boxes(withheld: Set<String> = [], whole: Set<String> = [], leftwards: Bool = false) -> [ReadWord]? {
+        wordBoxes(string, lineBox: line) { range in
+            let word = String(string[range])
+            if withheld.contains(word) { return nil }
+            return whole.contains(word) ? line : laid(range, leftwards: leftwards)
+        }
+    }
+    /// Every word kept, in order, each box real, clear of the next and (a guessed one) inside the
+    /// line; only `guessed` guessed, and the rest where Vision put them.
+    func tidy(_ found: [ReadWord]?, guessed: Set<String>, leftwards: Bool = false) -> Bool {
+        guard let found, found.map(\.text) == string.split(separator: " ").map(String.init) else { return false }
+        var index = string.startIndex
+        for (i, word) in found.enumerated() {
+            guard let start = string[index...].range(of: word.text) else { return false }
+            index = start.upperBound
+            guard word.box.width > 0, word.box.height > 0, word.guessed == guessed.contains(word.text) else { return false }
+            if word.guessed {
+                guard word.box.minX >= line.minX, word.box.maxX <= line.maxX else { return false }
+            } else if word.box != laid(start, leftwards: leftwards) {
+                return false
+            }
+            if i > 0 {
+                let previous = found[i - 1].box
+                guard leftwards ? word.box.maxX <= previous.minX : word.box.minX >= previous.maxX else { return false }
+            }
+        }
+        return true
+    }
+    let one = boxes(withheld: ["garden"])
+    check("a line with one word Vision cannot place keeps all its words, that one guessed between its neighbours",
+          tidy(one, guessed: ["garden"]))
+    if let garden = one?.first(where: { $0.text == "garden" }), let range = string.range(of: "garden") {
+        check("and guessed where its characters are", abs(garden.box.midX - laid(range).midX) < each / 2)
+    }
+    check("a word Vision gives the whole line's box is guessed too", tidy(boxes(whole: ["window"]), guessed: ["window"]))
+    check("the first and the last word are guessed from the line's own ends",
+          tidy(boxes(withheld: ["river", "paper"]), guessed: ["river", "paper"]))
+    check("two words side by side are guessed in order", tidy(boxes(withheld: ["market", "garden"]), guessed: ["market", "garden"]))
+    check("on a line laid right to left, a withheld word is guessed between its neighbours",
+          tidy(boxes(withheld: ["garden"], leftwards: true), guessed: ["garden"], leftwards: true))
+    check("a line Vision places none of goes without words", boxes(withheld: Set(string.split(separator: " ").map(String.init))) == nil)
+    let crowded = wordBoxes(string, lineBox: line) { range in
+        let word = String(string[range])
+        if word == "garden" { return nil }
+        // (market's box runs on over window's)
+        return word == "market" ? laid(range).union(laid(string.range(of: "window")!)) : laid(range)
+    }
+    check("a line whose placed words leave a withheld one no room goes without words", crowded == nil)
+    let alone = wordBoxes("river", lineBox: line) { _ in line }
+    check("a one-word line keeps a box the width of the line", alone?.count == 1 && alone?.first?.guessed == false)
+    // A Hebrew line of three words, only its middle one placed: no run of boxes to tell its way by.
+    let hebrew = "שלום עולם יפה"
+    let letter = line.width / CGFloat(hebrew.count)
+    let middle = CGRect(x: line.maxX - 9 * letter, y: line.minY, width: 4 * letter, height: line.height)
+    let rtl = wordBoxes(hebrew, lineBox: line) { range in String(hebrew[range]) == "עולם" ? middle : nil }
+    check("on a right to left line with one word placed, its first word is guessed on its right and its last on its left",
+          rtl.map { $0.count == 3 && $0[0].guessed && $0[2].guessed && $0[0].box.minX >= middle.maxX && $0[0].box.maxX <= line.maxX
+              && $0[2].box.maxX <= middle.minX && $0[2].box.minX >= line.minX } ?? false)
+}
+
+/*
+  The page's paper, rules and ink (pageGeometry), on windows drawn here at 2 pixels a point, as a
+  Retina capture is, and read by Vision's accurate pass, as a lesson's read is: a window 800 x 1000
+  points at (100, 50) on the screen; a page with two paragraphs of made-up words on it, a 200 point
+  rule under the first, a filled box between them; and under it the top of the next page (no
+  words), as a viewer that scrolls shows it. Then the same words on a page that fills the window,
+  its corners rounded off as a window's capture has them, and on a page under a browser's white
+  bars; and the first page again at 1 and at 1.25 pixels a point.
+*/
+func geometrySelfTest(_ check: (String, Bool) -> Void) {
+    let window = CGRect(x: 100, y: 50, width: 800, height: 1000)
+    let list = "river market garden window paper candle silver morning yellow travel kitchen pencil orange thunder"
+        .split(separator: " ").map(String.init)
+    let rows = (0..<12).map { i in (0..<6).map { list[(i * 5 + $0 * 3) % list.count] }.joined(separator: " ") }
+    let baselines: [CGFloat] = (0..<12).map { i -> CGFloat in (i < 6 ? 110 : 364) + CGFloat(i) * 26 }
+    let font = CTFontCreateWithName("Georgia" as CFString, 16, nil)
+    // In points from the window's top left.
+    let page = CGRect(x: 150, y: 40, width: 500, height: 900)
+    let nextPage = CGRect(x: 150, y: 960, width: 500, height: 40)
+    let rule = CGRect(x: 200, y: 262, width: 200, height: 1)
+    let box = CGRect(x: 220, y: 320, width: 160, height: 120)
+    func onScreen(_ r: CGRect) -> CGRect { r.offsetBy(dx: window.minX, dy: window.minY) }
+
+    /// The window: a viewer of grey `viewer`, `pages` of grey `paper` on it, and the words, the rule
+    /// and the box in grey `ink`. `bar`: a bar of the viewer's as light as the paper, with a title
+    /// on it (a browser's white tab strip and toolbar); `corner`: the window's corners rounded off,
+    /// nothing drawn past them, as a window's capture has them; `scale`: pixels a point (2, a
+    /// Retina capture; 1, a display that is not; or what a capture over MAX_PIXELS_WIDE is cut to).
+    func picture(viewer: CGFloat, paper: CGFloat, ink: CGFloat, pages: [CGRect], bar: CGRect? = nil, corner: CGFloat = 0, scale: CGFloat = 2) -> CGImage? {
+        let width = Int(window.width * scale)
+        let height = Int(window.height * scale)
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        if corner > 0 {
+            let whole = CGRect(x: 0, y: 0, width: width, height: height)
+            context.addPath(CGPath(roundedRect: whole, cornerWidth: corner * scale, cornerHeight: corner * scale, transform: nil))
+            context.clip()
+        }
+        context.setFillColor(CGColor(gray: viewer, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: scale, y: -scale)
+        context.setFillColor(CGColor(gray: paper, alpha: 1))
+        for p in pages { context.fill(p) }
+        if let bar { context.fill(bar) }
+        context.setFillColor(CGColor(gray: ink, alpha: 1))
+        context.fill(rule)
+        context.fill(box)
+        context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: ink, alpha: 1),
+        ]
+        var texts = Array(zip(rows, baselines).map { (text: $0.0, at: CGPoint(x: 200, y: $0.1)) })
+        if let bar { texts.append((text: "Reading notes", at: CGPoint(x: bar.minX + 40, y: bar.minY + 26))) }
+        for (text, at) in texts {
+            context.textPosition = at
+            CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes)), context)
+        }
+        return context.makeImage()
+    }
+    func geometry(_ image: CGImage?) -> (geometry: PageGeometry?, lines: [ReadLine]) {
+        guard let image, let observations = try? recognize(image, .accurate) else { return (nil, []) }
+        let lines = readLines(observations, frame: window)
+        return (pageGeometry(image, frame: window, lines: lines), lines)
+    }
+    func near(_ a: CGRect?, _ b: CGRect, within: CGFloat = 2) -> Bool {
+        guard let a else { return false }
+        return abs(a.minX - b.minX) <= within && abs(a.maxX - b.maxX) <= within && abs(a.minY - b.minY) <= within && abs(a.maxY - b.maxY) <= within
+    }
+    /// The cells of a grid that are drawn on, in screen points.
+    func inkedCells(_ ink: InkGrid) -> [CGRect] {
+        var cells: [CGRect] = []
+        for r in 0..<ink.rows {
+            for c in 0..<ink.cols where ink.inked(col: c, row: r) {
+                cells.append(CGRect(x: ink.x + Double(c * INK_CELL), y: ink.y + Double(r * INK_CELL), width: Double(INK_CELL), height: Double(INK_CELL)))
+            }
+        }
+        return cells
+    }
+    /// The rule, the box and the words as a page shows them, checked: `what` names the page.
+    func checkPage(_ what: String, _ found: (geometry: PageGeometry?, lines: [ReadLine])) {
+        let textBoxes = found.lines.flatMap { $0.words?.map(\.box) ?? [$0.box] }
+        check("\(what): Vision reads its 12 rows", found.lines.filter { hasLetterOrDigit($0.text) }.count == 12)
+        guard let geometry = found.geometry else {
+            check("\(what): its geometry is told", false)
+            return
+        }
+        check("\(what): the page's rectangle is told within 2 points, not the next page's", near(geometry.paper, onScreen(page)))
+        check("\(what): the 200 point rule under a line of words is found, and the words and the box are not",
+              geometry.rules.count == 1 && near(geometry.rules.first, onScreen(rule)))
+        let cells = inkedCells(geometry.ink)
+        let boxOn = onScreen(box)
+        let ruleOn = onScreen(rule).insetBy(dx: -1, dy: -1)
+        var inside = 0
+        var insideInked = 0
+        for r in 0..<geometry.ink.rows {
+            for c in 0..<geometry.ink.cols {
+                let cell = CGRect(x: geometry.ink.x + Double(c * INK_CELL), y: geometry.ink.y + Double(r * INK_CELL), width: Double(INK_CELL), height: Double(INK_CELL))
+                guard boxOn.contains(cell) else { continue }
+                inside += 1
+                if geometry.ink.inked(col: c, row: r) { insideInked += 1 }
+            }
+        }
+        check("\(what): the filled box sets every cell inside it", inside > 0 && insideInked == inside)
+        check("\(what): nothing else is inked, and the cells over the words stay clear",
+              cells.allSatisfy { $0.intersects(boxOn) || $0.intersects(ruleOn) }
+                && !cells.contains { cell in !cell.intersects(boxOn) && !cell.intersects(ruleOn) && textBoxes.contains { $0.intersects(cell) } })
+        check("\(what): the grid lies over the paper told",
+              geometry.paper.map {
+                  geometry.ink.x == Double($0.minX) && geometry.ink.y == Double($0.minY)
+                    && geometry.ink.cols == Int(($0.width / CGFloat(INK_CELL)).rounded(.up)) && geometry.ink.rows == Int(($0.height / CGFloat(INK_CELL)).rounded(.up))
+              } ?? false)
+    }
+
+    let white = geometry(picture(viewer: 0.6, paper: 1, ink: 0.1, pages: [page, nextPage]))
+    checkPage("a white page on a grey viewer", white)
+    if let geometry = white.geometry, let ink = geometryFields(geometry)["ink"] as? [String: Any], let sent = ink["bits"] as? String,
+       let bytes = Data(base64Encoded: sent).map(Array.init) {
+        var same = ink["cell"] as? Int == 8 && ink["cols"] as? Int == geometry.ink.cols && ink["rows"] as? Int == geometry.ink.rows
+        for i in 0..<(geometry.ink.cols * geometry.ink.rows) {
+            if (bytes[i >> 3] & UInt8(1 << (i & 7)) != 0) != geometry.ink.inked(col: i % geometry.ink.cols, row: i / geometry.ink.cols) { same = false }
+        }
+        check("the grid goes as base64, cell r * cols + c at bit (i & 7) of byte i >> 3", same)
+    } else {
+        check("the grid goes as base64, cell r * cols + c at bit (i & 7) of byte i >> 3", false)
+    }
+    // A night theme: a dark page, light words and marks, on Chrome's dark grey.
+    checkPage("a dark page", geometry(picture(viewer: 0.33, paper: 0.12, ink: 0.9, pages: [page, nextPage])))
+    // The same page captured at a point a pixel (a display that is not Retina), and at 1.25 pixels
+    // a point (a capture cut down under MAX_PIXELS_WIDE): pageGeometry draws either down to points.
+    checkPage("a white page captured at 1x", geometry(picture(viewer: 0.6, paper: 1, ink: 0.1, pages: [page, nextPage], scale: 1)))
+    checkPage("a white page captured at 1.25x", geometry(picture(viewer: 0.6, paper: 1, ink: 0.1, pages: [page, nextPage], scale: 1.25)))
+    // Kindle's way: the page fills the window, its corners rounded off.
+    let filling = geometry(picture(viewer: 1, paper: 1, ink: 0.1, pages: [], corner: 10))
+    check("a page that fills the window has no paper told, and its grid covers the window",
+          filling.geometry.map {
+              $0.paper == nil && $0.ink.x == Double(window.minX) && $0.ink.y == Double(window.minY)
+                && $0.ink.cols == Int(window.width) / INK_CELL && $0.ink.rows == Int(window.height) / INK_CELL
+                && $0.rules.count == 1 && near($0.rules.first, onScreen(rule))
+          } ?? false)
+    check("and the window's rounded corners, where nothing is drawn, are not inked",
+          filling.geometry.map { inkedCells($0.ink).allSatisfy { $0.intersects(onScreen(box)) || $0.intersects(onScreen(rule).insetBy(dx: -1, dy: -1)) } } ?? false)
+    // A browser's white tab strip and toolbar, a title on it, over its dark PDF viewer: over the
+    // rows from the title to the page's last line it is a tenth of every column, the dark viewer's
+    // beside the page too, but it is no part of the page.
+    let below = CGRect(x: 150, y: 92, width: 500, height: 888)
+    let barred = geometry(picture(viewer: 0.33, paper: 1, ink: 0.1, pages: [below], bar: CGRect(x: 0, y: 0, width: 800, height: 80)))
+    check("under a browser's white bars, the page's rectangle is told within 2 points, not the window's width",
+          near(barred.geometry?.paper, onScreen(below)))
 }
 
 /*
@@ -3726,8 +4685,11 @@ func handle(_ line: String) {
         setCompanion(message["on"] as? Bool ?? false, stop: stop, privateApps: privateApps, readerApps: readerApps)
     case "observe":
         // Ordinary windows the app has heard of from "over" or a read: at most two are watched.
+        // "page": those of them that turn by the page, where no wheel explains a new look (left
+        // out by an app older than it: none).
         let windows = ((message["windows"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.uint32Value }
-        observeWindows(windows)
+        let paged = Set(((message["page"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.uint32Value })
+        observeWindows(windows, paged: paged)
     case "chord":
         // On exactly while the app's talk key is (a lesson's shortcuts, or the companion on).
         setChord(message["on"] as? Bool ?? false)
