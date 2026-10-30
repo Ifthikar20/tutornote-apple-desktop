@@ -12,7 +12,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && scripts/build-speech-helper.sh && scripts/build-screen-helper.sh",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test scripts/tests/boardHost.test.ts scripts/tests/boardPlace.test.ts scripts/tests/companionPlace.test.ts scripts/tests/speechLog.test.ts scripts/tests/apiTiming.test.ts scripts/tests/launchReveal.test.ts scripts/tests/docIdentity.test.ts scripts/tests/env.test.ts scripts/tests/argGuard.test.ts scripts/tests/authCallback.test.ts",
+    "test": "node --experimental-strip-types --test scripts/tests/boardHost.test.ts scripts/tests/boardPlace.test.ts scripts/tests/companionPlace.test.ts scripts/tests/speechLog.test.ts scripts/tests/apiTiming.test.ts scripts/tests/launchReveal.test.ts scripts/tests/docIdentity.test.ts scripts/tests/env.test.ts scripts/tests/argGuard.test.ts scripts/tests/authCallback.test.ts scripts/tests/micConsent.test.ts",
     "start": "npm run build && electron .",
     "mac": "scripts/run-mac.sh",
     "pack": "npm run build && scripts/use-node.sh electron-builder --dir --config electron-builder.config.cjs",

@@ -2,6 +2,16 @@
 # the .dmg, the .zip and latest-mac.yml (the update feed); a manual run only uploads
 # them as a workflow artifact.
 #
+# Two jobs, so that the code of other people that a build runs never sits beside the signing
+# secrets (WHAT_TO_FIX.md MAC-04):
+#   build    installs and builds: this repo's packages, the main process and the Swift helpers,
+#            the web app's checkout, its packages and its build. A read-only token, and no secret
+#            but WEB_REPO_TOKEN, which only its checkout step is given (and which is not left on
+#            disk). It hands dist/, build/helpers/ and renderer/ on as an artifact.
+#   package  signs, notarises and publishes. It installs this repo's locked packages with no
+#            install script, takes the three folders from "build" as data (none of their files
+#            runs here; nothing else of the artifact is used), and runs electron-builder alone.
+#
 # Signing and notarising happen when these repository secrets exist; without them the
 # build is unsigned (fine for trying it yourself, see the README):
 #   MAC_CERT_P12_BASE64   Developer ID Application certificate, .p12, base64-encoded
@@ -10,6 +20,13 @@
 #   APPLE_APP_SPECIFIC_PASSWORD   an app-specific password for that Apple ID
 #   APPLE_TEAM_ID         the 10-character team ID
 #   WEB_REPO_TOKEN        read access to playstudy-card-dash if it is private (its build goes inside the app)
+# And one repository variable (Settings > Secrets and variables > Actions > Variables):
+#   WEB_REF               the web app's reviewed commit (or tag) to build; unset, its default
+#                         branch, as before
+#
+# Every action is pinned to a commit, with its tag beside it, so a tag moved later cannot change
+# what runs here. To move one on: git ls-remote https://github.com/actions/<name> refs/tags/<tag>
+# (for an annotated tag, the commit is its ^{} line).
 name: Build macOS app
 
 on:
@@ -17,39 +34,43 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
-# The default token is read-only (WHAT_TO_FIX.md MAC-04); the job below takes contents: write
-# only because a tag build publishes a GitHub release.
+# The default token is read-only (WHAT_TO_FIX.md MAC-04); only the package job takes
+# contents: write, because a tag build publishes a GitHub release.
 permissions:
   contents: read
 
 jobs:
-  mac:
+  build:
     runs-on: macos-latest
-    # Needed to publish the release on a tag build; a manual run (--publish never) does not use it.
     permissions:
-      contents: write
+      contents: read
     steps:
       # persist-credentials: false keeps the checkout token out of .git/config, so a dependency's
-      # install script cannot read it off disk (WHAT_TO_FIX.md MAC-04). Publishing uses GH_TOKEN
-      # (the step below), not the stored git credential.
-      - uses: actions/checkout@v4
+      # install script cannot read it off disk (WHAT_TO_FIX.md MAC-04).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      # No install script is needed here: tsc and the Swift helpers build without one, Electron
+      # itself never runs in CI, and electron-builder fetches its own copy in the package job.
+      - run: npm ci --ignore-scripts
+
+      - name: Build the main process and the helpers
+        run: npm run build
 
       # The web app's build goes inside the app (README: how it is put together). If the
       # web repo is private, WEB_REPO_TOKEN is a token that can read it (a fine-grained
       # PAT with Contents: read on playstudy-card-dash); a public repo needs none.
       - name: Check out the web app
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Ifthikar20/playstudy-card-dash
+          ref: ${{ vars.WEB_REF }}
           token: ${{ secrets.WEB_REPO_TOKEN || github.token }}
           path: .web
           persist-credentials: false
@@ -57,7 +78,64 @@ jobs:
       - name: Build the web app into renderer/
         run: scripts/build-renderer.sh
 
-      - name: Build and package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tutornote-mac-built
+          path: |
+            dist/
+            build/helpers/
+            renderer/
+          if-no-files-found: error
+          retention-days: 1
+
+  package:
+    needs: build
+    runs-on: macos-latest
+    # Needed to publish the release on a tag build; a manual run (--publish never) does not use it.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # No npm cache here: a cache the build job saved is never restored into the job that holds
+      # the secrets. npm ci checks every package against the lockfile's integrity hashes.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - run: npm ci --ignore-scripts
+
+      # Into a folder of its own, outside the checkout: only the three folders are taken from it.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tutornote-mac-built
+          path: ${{ runner.temp }}/built
+
+      # dist/ and renderer/ are packed into app.asar, the helpers into Contents/Resources; nothing
+      # of them runs in this job. No symbolic link is taken (one could point at this checkout's own
+      # files), and the helpers get back the executable bit an artifact does not keep.
+      - name: Put the built files in place
+        run: |
+          set -euo pipefail
+          from="$RUNNER_TEMP/built"
+          for folder in dist renderer; do
+            [ -d "$from/$folder" ] || { echo "::error::the build job's artifact has no $folder/"; exit 1; }
+          done
+          if [ -n "$(find "$from" -type l -print -quit)" ]; then
+            echo "::error::the build job's artifact holds a symbolic link"; exit 1
+          fi
+          rm -rf dist renderer build/helpers
+          cp -R "$from/dist" dist
+          cp -R "$from/renderer" renderer
+          if [ -d "$from/build/helpers" ]; then
+            mkdir -p build/helpers
+            cp -R "$from/build/helpers/." build/helpers/
+            find build/helpers -type f -name 'tutornote-*' -exec chmod 0755 {} +
+          fi
+
+      - name: Package, sign and notarise
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
@@ -67,10 +145,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then PUBLISH=always; else PUBLISH=never; fi
-          npm run build
           npx electron-builder --mac --publish "$PUBLISH" --config electron-builder.config.cjs
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tutornote-mac
           path: |
