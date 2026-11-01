@@ -94,8 +94,9 @@ The web app comes from `scripts/build-renderer.sh`: it clones (or updates) the
 `playstudy-card-dash` repo into `.web/`, runs its `build:off` profile (Turnstile off, API
 at the relative `/api`, the same as the deployed site), and copies `dist/` to
 `renderer/`. Point it at a checkout you already have with `ANOTHERNOTES_WEB_DIR=…`, or at
-a branch with `ANOTHERNOTES_WEB_REF=…`. `renderer/BUILD` records the commit, and the app
-prints it at start-up. Whenever the web app changes, run it again; the Mac app carries
+a branch with `ANOTHERNOTES_WEB_REF=…`. `renderer/BUILD` records the commit, its branch and
+whether it was pushed or built with changes not committed (`<sha> (<branch>, pushed|not pushed|dirty)`),
+and the app prints it at start-up. Whenever the web app changes, run it again; the Mac app carries
 the build it was packaged with.
 
 The bundle is whichever branch was built. The `.web/` clone follows the web repo's
