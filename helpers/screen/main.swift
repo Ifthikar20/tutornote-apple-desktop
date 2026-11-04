@@ -5,6 +5,9 @@
   text with Apple's Vision framework, on this Mac. Nothing is kept: the picture is dropped
   once read, and only the lines and their words go back to the app (and, with a read a lesson
   teaches from, where the page's paper, rules and other marks are: numbers, never pixels).
+  The one picture it ever hands the app is of a part of a window the student circled with the
+  companion on, to be explained ("Circle to explain"): a JPEG of that part of that window
+  alone, never of a private app's, nor while a password field has the keys.
 
   During a lesson it also turns that window's page: it scrolls it or presses a key in its
   app (which needs Accessibility), or waits for the student to do it, then watches small
@@ -16,7 +19,9 @@
   says which window the cursor is over, hears presses, taps and scrolls on any window (never
   taking them), and keeps an eye on up to two windows (the lesson's and the one under the
   cursor) with a thumbnail twice a second, to say when one has settled into a new look (a
-  page the student turned). It never moves the cursor, and it never clicks or types: the only
+  page the student turned). A drag on any window is told as it ends, with its stroke ("lift"),
+  so the app's page can tell a ring drawn round something to explain from a selection. It
+  never moves the cursor, and it never clicks or types: the only
   input it ever posts is a lesson's own turn (postScroll, pressKey), as before.
 
   While the app's talk key is on, it also watches for the talk chord: Control and Option pressed
@@ -87,6 +92,11 @@
                                                    pressed on their own, in any app: "The talk
                                                    chord", polled, no permission), or stop (a
                                                    chord under way says "cancel", "off")
+         {"cmd":"crop","id":3,"window":12345,"x":…,"y":…,"w":…,"h":…}
+                                                   with the companion on: a picture of that
+                                                   rectangle (screen points) of that window
+                                                   alone, for a picture the student circled
+                                                   ("Circle to explain")
     out  {"ev":"status","screen":true}
          {"ev":"ax","trusted":true}                status and ax are answered in order
          {"id":1,"ev":"read","app":"Kindle","bundle":"com.amazon.Lassen","title":"…",
@@ -169,6 +179,18 @@
                                                    on an ordinary window (at once, before any
                                                    picture); with it off, on the watched window
                                                    alone
+         {"ev":"lift","x":…,"y":…,"window":12345,"points":[[x,y],…],"private":false}
+                                                   with the companion on: the button came up
+                                                   after a drag (no tap: it went 5 points or
+                                                   more, or was held 0.7 s or longer) that began
+                                                   on an ordinary window ("window": the press's);
+                                                   "points": its stroke from the press, LIFT_POINTS
+                                                   at most, its first and last among them (the
+                                                   app's page tells a ring from it); "private":
+                                                   as a release's. Nothing is judged here
+         {"id":3,"ev":"crop","data":"…","type":"image/jpeg","w":640,"h":480,"cropMs":40}
+                                                   the picture: a JPEG, base64, w x h pixels, its
+                                                   longer side CROP_MOST at most
          {"ev":"over","window":12345,"pid":678,"app":"Kindle","bundle":"…","title":"…",
           "frame":{…},"own":false,"secure":false}  with the companion on: the window the cursor
                                                    is over changed. "window" null over nothing
@@ -239,12 +261,17 @@
                                                    hidden from this helper ("hidden")
          {"id":1,"ev":"error","code":"…"}          no_permission, no_window, window_gone,
                                                    no_access, capture_failed, bad_command,
-                                                   cancelled
+                                                   cancelled; for a crop also off (the
+                                                   companion is), private (a private app's or
+                                                   Tutornote's window, or secure input on),
+                                                   bad_rect (under CROP_MIN a side inside the
+                                                   window)
 
   `tutornote-screen --selftest` checks the picture arithmetic, the words rule, and a page's paper,
   rules and ink on pictures it draws itself (no screen needed), a line's guessed words on made up
-  boxes, a wheel's step and the keys that burst a window on made up numbers, and the talk chord's
-  steps on made up presses, and exits 0 or 1. `tutornote-screen --chordtest` (in Terminal, for a person at the keyboard) prints what the
+  boxes, a wheel's step and the keys that burst a window on made up numbers, the talk chord's
+  steps on made up presses, and a drag's stroke and a crop's rectangle and JPEG on made up
+  points, and exits 0 or 1. `tutornote-screen --chordtest` (in Terminal, for a person at the keyboard) prints what the
   chord's polls see for 20 s; it needs no app, shows no window and asks for nothing.
 
   Needs macOS 14 (ScreenCaptureKit's one-picture capture). The app shows no button when the
@@ -256,6 +283,7 @@ import Carbon
 import CoreText
 import Darwin
 import Foundation
+import ImageIO
 import ScreenCaptureKit
 import Security
 import Vision
@@ -1636,7 +1664,8 @@ func takeTurn(_ id: Int) -> Task<Void, Never>? {
   window is see-through and lets every click through to the app below, so it never hears the
   tap; this does, without taking it: a global monitor sees the click the other app gets (watching
   mouse clicks needs no permission; only key presses would need Accessibility). A tap is a press
-  and a release within 5 points and 0.7 s (a drag is the student selecting text), on the watched
+  and a release within 5 points and 0.7 s (a drag is the student selecting text, or with the
+  companion on perhaps drawing a ring: "Circle to explain"), on the watched
   window where it is the one on top. Each tap says whether the window had moved since its last
   read (the student scrolled it) by the time it was pressed, judged on its middle rows: the
   paragraphs the lesson holds are then not where they were. (What the click itself does there, a
@@ -1749,6 +1778,7 @@ func installWatch() {
             pressedAt = (point, now)
             pressBefore = nil
             watchPress = nil
+            drag = nil
             // (the cursor as the button went down: over a link it is the pointing hand)
             pressHand = companionOn && isPointingHand(NSCursor.currentSystem)
             // The companion's press is told at once, before any picture is taken; the picture
@@ -1760,7 +1790,10 @@ func installWatch() {
             // for the second press of a double click (its tap selects words: no pictures).
             if companionOn, case let .window(top) = overAt(point, now: now, force: true) {
                 emit(["ev": "press", "x": Double(point.x), "y": Double(point.y), "window": Int(top.id)])
-                if !keptPrivate(top.pid) && event.clickCount < 2 {
+                let hidden = keptPrivate(top.pid)
+                // (the drag from here may be a ring round something to explain: "Circle to explain")
+                drag = Drag(window: top.id, hidden: hidden, points: [point])
+                if !hidden && event.clickCount < 2 {
                     let look = latestThumb(top.id, within: PRESS_LOOK_S)
                     let column = columnRect(x: point.x, frame: top.frame)
                     pressBefore = PressBefore(
@@ -1786,6 +1819,8 @@ func installWatch() {
             }
             return
         }
+        let stroke = drag
+        drag = nil
         guard let pressed = pressedAt else { return }
         pressedAt = nil
         let before = pressBefore
@@ -1794,7 +1829,16 @@ func installWatch() {
         pressHand = false
         let pressPicture = watchPress
         watchPress = nil
-        guard now - pressed.time < 0.7, hypot(point.x - pressed.point.x, point.y - pressed.point.y) < 5 else { return }
+        guard now - pressed.time < 0.7, hypot(point.x - pressed.point.x, point.y - pressed.point.y) < 5 else {
+            // No tap: a drag (a selection, a ring drawn round something), or a long press. With the
+            // companion on it is said ("lift") with its stroke, and the app's page tells whether it
+            // is a ring; nothing is judged here.
+            if companionOn, var stroke {
+                dragAdd(&stroke.points, point)
+                emit(liftFields(stroke, at: point))
+            }
+            return
+        }
         let alt = event.modifierFlags.contains(.option)
         if companionOn {
             companionTap(at: point, alt: alt, clicks: event.clickCount, hand: hand, before: before)
@@ -3364,6 +3408,8 @@ func setCompanion(_ on: Bool, stop: Set<CGWindowID>, privateApps: Set<String>, r
         if moveMonitor == nil {
             moveMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { event in
                 guard companionOn, let point = event.cgEvent?.location else { return }
+                // (a drag's stroke grows: "Circle to explain")
+                if event.type == .leftMouseDragged, drag != nil { dragAdd(&drag!.points, point) }
                 overAt(point, now: ProcessInfo.processInfo.systemUptime)
             }
         }
@@ -3382,7 +3428,151 @@ func setCompanion(_ on: Bool, stop: Set<CGWindowID>, privateApps: Set<String>, r
         observeLock.unlock()
         lastOver = nil
         pressBefore = nil
+        drag = nil
         observeWindows([])
+    }
+}
+
+// MARK: - Circle to explain
+
+/*
+  With the companion on, the student holds the button down and draws a ring round something in
+  any window: a paragraph (the lesson starts there) or a picture (the tutor explains it step by
+  step). Which one, and whether it is a ring at all, the app's page decides (the web app's
+  lib/screen/circle.ts): this side only says each drag as it ends ("lift"), with its stroke, as
+  heard by the move watch (setCompanion: the global monitor sees the drag the other app gets;
+  nothing is taken). The stroke keeps a point every DRAG_STEP points, thinned past DRAG_MAX (never
+  cut short), and LIFT_POINTS of them, evenly taken, are said. All of it on the main thread.
+
+  For a picture the app asks for that part of the window ("crop"): the window alone, as every read
+  takes it, so nothing over it is in the picture (the ring's ink and the tutor, any other window,
+  a private app's among them), clipped to the window and scaled down so its longer side is
+  CROP_MOST at the most, a JPEG on white. Never of a private app's window, of Tutornote's own, or
+  while a password field has the keys; never with the companion off. The page has already looked
+  for private words inside the ring (lib/screen/sensitive.ts) before it asks.
+*/
+
+/// A drag under way: the window it began on, whether that window was private then (keptPrivate),
+/// and its stroke (screen points).
+struct Drag {
+    let window: CGWindowID
+    let hidden: Bool
+    var points: [CGPoint]
+}
+
+var drag: Drag?
+/// A stroke keeps no point nearer its last than this, in points either way.
+let DRAG_STEP: CGFloat = 2
+/// A stroke this long has every other point dropped.
+let DRAG_MAX = 1024
+/// The points a lift says at the most.
+let LIFT_POINTS = 160
+/// A crop's longer side at the most, in pixels, and its JPEG quality.
+let CROP_MOST: CGFloat = 1024
+let CROP_QUALITY = 0.82
+/// A crop with less than this inside the window on either side is none, in points.
+let CROP_MIN: CGFloat = 8
+
+/// `p` added to `stroke`, unless it is within DRAG_STEP of the last point; at DRAG_MAX, every other
+/// point goes (its first and last stay).
+func dragAdd(_ stroke: inout [CGPoint], _ p: CGPoint) {
+    if let last = stroke.last, abs(p.x - last.x) < DRAG_STEP, abs(p.y - last.y) < DRAG_STEP { return }
+    stroke.append(p)
+    guard stroke.count >= DRAG_MAX else { return }
+    var thin = stride(from: 0, to: stroke.count, by: 2).map { stroke[$0] }
+    if (stroke.count - 1) % 2 != 0, let last = stroke.last { thin.append(last) }
+    stroke = thin
+}
+
+/// `stroke` as a lift says it: `most` points at the most, evenly taken, its first and last among
+/// them.
+func liftPoints(_ stroke: [CGPoint], most: Int) -> [CGPoint] {
+    guard most >= 2 else { return [] }
+    guard stroke.count > most else { return stroke }
+    let step = Double(stroke.count - 1) / Double(most - 1)
+    return (0..<most).map { stroke[Int((Double($0) * step).rounded())] }
+}
+
+/// The lift for `stroke`, ended at `point`.
+func liftFields(_ stroke: Drag, at point: CGPoint) -> [String: Any] {
+    [
+        "ev": "lift", "x": Double(point.x), "y": Double(point.y), "window": Int(stroke.window), "private": stroke.hidden,
+        "points": liftPoints(stroke.points, most: LIFT_POINTS).map { [tenths(Double($0.x)), tenths(Double($0.y))] },
+    ]
+}
+
+/// `asked` (screen points) in the window at `frame`'s own points (its top left 0, 0), clipped to
+/// it; nil with less than CROP_MIN of it left inside on either side.
+func cropSource(_ asked: CGRect, frame: CGRect) -> CGRect? {
+    let local = asked.offsetBy(dx: -frame.minX, dy: -frame.minY).intersection(CGRect(origin: .zero, size: frame.size))
+    guard !local.isNull, local.width >= CROP_MIN, local.height >= CROP_MIN else { return nil }
+    return local
+}
+
+/// A crop of `source` points in pixels: at its display's `scale`, its longer side CROP_MOST at the most.
+func cropPixels(_ source: CGSize, scale: CGFloat) -> (width: Int, height: Int) {
+    let k = min(scale, CROP_MOST / max(source.width, source.height, 1))
+    return (max(1, Int((source.width * k).rounded())), max(1, Int((source.height * k).rounded())))
+}
+
+/// `image` as a JPEG, base64, drawn on white in sRGB first (what a window shows see-through, its
+/// rounded corners, is white in it, not black); nil when it cannot be made.
+func jpegBase64(_ image: CGImage, quality: Double) -> String? {
+    guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+    else { return nil }
+    let all = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+    context.setFillColor(CGColor(gray: 1, alpha: 1))
+    context.fill(all)
+    context.draw(image, in: all)
+    guard let flat = context.makeImage() else { return nil }
+    let data = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, "public.jpeg" as CFString, 1, nil) else { return nil }
+    CGImageDestinationAddImage(destination, flat, [kCGImageDestinationLossyCompressionQuality as String: quality] as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { return nil }
+    return (data as Data).base64EncodedString()
+}
+
+/// A crop asked for (main thread, where the lists it goes by are kept): refused with the companion
+/// off, without Screen Recording, for a window gone from the screen, for Tutornote's own or a
+/// private one (keptPrivate), or with too little of it inside the window; else taken.
+func startCrop(id: Int, window: CGWindowID, asked: CGRect) {
+    func refuse(_ code: String) { emit(["id": id, "ev": "error", "code": code]) }
+    guard companionOn else { return refuse("off") }
+    guard CGPreflightScreenCaptureAccess() else { return refuse("no_permission") }
+    guard let target = onScreenWindow(window) else { return refuse("window_gone") }
+    guard !stopWindows.contains(target.id), !isTutornoteKept(target.pid), !keptPrivate(target.pid) else { return refuse("private") }
+    guard let source = cropSource(asked, frame: target.frame) else { return refuse("bad_rect") }
+    let size = cropPixels(source.size, scale: scaleFor(target.frame))
+    Task { await crop(id: id, target: target, source: source, size: size) }
+}
+
+/// The picture of `source` (the window's own points) of `target` alone, `size` pixels, said as a
+/// "crop" (or an error).
+func crop(id: Int, target: Target, source: CGRect, size: (width: Int, height: Int)) async {
+    let started = DispatchTime.now()
+    let config = SCStreamConfiguration()
+    config.sourceRect = source
+    config.width = size.width
+    config.height = size.height
+    config.showsCursor = false
+    config.ignoreShadowsSingleWindow = true
+    do {
+        guard let image = try await throughFilter(target.id, frame: target.frame, {
+            try await SCScreenshotManager.captureImage(contentFilter: $0, configuration: config)
+        }) else {
+            emit(["id": id, "ev": "error", "code": "window_gone"])
+            return
+        }
+        guard let data = jpegBase64(image, quality: CROP_QUALITY) else {
+            emit(["id": id, "ev": "error", "code": "capture_failed"])
+            return
+        }
+        emit(["id": id, "ev": "crop", "data": data, "type": "image/jpeg", "w": image.width, "h": image.height, "cropMs": msSince(started)])
+    } catch {
+        log("[screen] crop failed: \(error.localizedDescription)")
+        emit(["id": id, "ev": "error", "code": "capture_failed"])
     }
 }
 
@@ -3611,7 +3801,56 @@ func selfTest() -> Bool {
     holdSelfTest(check)
     identSelfTest(check)
     chordSelfTest(check)
+    circleSelfTest(check)
     return ok
+}
+
+/// A drag's stroke as a lift says it, and a crop's rectangle, size and JPEG ("Circle to explain").
+func circleSelfTest(_ check: (String, Bool) -> Void) {
+    var stroke: [CGPoint] = []
+    dragAdd(&stroke, CGPoint(x: 10, y: 10))
+    dragAdd(&stroke, CGPoint(x: 11, y: 10))
+    check("a stroke keeps no point within 2 points of its last", stroke.count == 1)
+    for i in 1..<3000 { dragAdd(&stroke, CGPoint(x: 10 + i * 3, y: 10)) }
+    let end = CGFloat(10 + 2999 * 3)
+    check("a long stroke is thinned, never cut short", stroke.count < DRAG_MAX && stroke.first?.x == 10 && stroke.last?.x == end)
+    let lifted = liftPoints(stroke, most: LIFT_POINTS)
+    check("a lift says 160 points at the most, its first and last among them",
+          lifted.count == LIFT_POINTS && lifted.first?.x == 10 && lifted.last?.x == end)
+    check("a short stroke is said whole", liftPoints([CGPoint(x: 1, y: 2), CGPoint(x: 3, y: 4)], most: LIFT_POINTS).count == 2)
+    let fields = liftFields(Drag(window: 7, hidden: false, points: stroke), at: CGPoint(x: end, y: 10))
+    check("a lift is valid JSON with its points as pairs",
+          JSONSerialization.isValidJSONObject(fields) && (fields["points"] as? [[Double]])?.count == LIFT_POINTS)
+    let frame = CGRect(x: 100, y: 50, width: 800, height: 600)
+    check("a crop is taken in the window's own points, clipped to it",
+          cropSource(CGRect(x: 80, y: 100, width: 200, height: 100), frame: frame) == CGRect(x: 0, y: 50, width: 180, height: 100))
+    check("a crop with under 8 points a side inside the window is none",
+          cropSource(CGRect(x: 895, y: 100, width: 200, height: 100), frame: frame) == nil
+            && cropSource(CGRect(x: 2000, y: 0, width: 50, height: 50), frame: frame) == nil)
+    let big = cropPixels(CGSize(width: 900, height: 450), scale: 2)
+    let small = cropPixels(CGSize(width: 200, height: 100), scale: 2)
+    check("a crop's longer side is 1024 pixels at the most, else at its display's scale",
+          big.width == 1024 && big.height == 512 && small.width == 400 && small.height == 200)
+    // (a picture see-through but for a grey square: a JPEG, its see-through part white)
+    var made: CGImage?
+    if let context = CGContext(data: nil, width: 40, height: 30, bitsPerComponent: 8, bytesPerRow: 0,
+                               space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
+        context.clear(CGRect(x: 0, y: 0, width: 40, height: 30))
+        context.setFillColor(CGColor(gray: 0.5, alpha: 1))
+        context.fill(CGRect(x: 20, y: 0, width: 20, height: 30))
+        made = context.makeImage()
+    }
+    let jpeg = made.flatMap { jpegBase64($0, quality: CROP_QUALITY) }.flatMap { Data(base64Encoded: $0) }
+    check("a crop is a JPEG", jpeg.map { $0.count > 100 && $0[0] == 0xFF && $0[1] == 0xD8 && $0[2] == 0xFF } ?? false)
+    var corner: UInt8 = 0
+    if let jpeg, let source = CGImageSourceCreateWithData(jpeg as CFData, nil), let back = CGImageSourceCreateImageAtIndex(source, 0, nil),
+       let context = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 1,
+                               space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) {
+        // (its left edge, see-through in the picture, drawn into one pixel)
+        context.draw(back, in: CGRect(x: 0, y: 0, width: 40, height: 30))
+        corner = context.data?.load(as: UInt8.self) ?? 0
+    }
+    check("what a crop shows see-through is white in its JPEG", corner > 240)
 }
 
 /// What a selftest task saw (holdSelfTest): written by it, read once it has signalled.
@@ -4693,6 +4932,19 @@ func handle(_ line: String) {
     case "chord":
         // On exactly while the app's talk key is (a lesson's shortcuts, or the companion on).
         setChord(message["on"] as? Bool ?? false)
+    case "crop":
+        // A picture of part of a window the student circled ("Circle to explain").
+        guard let id = message["id"] as? Int else {
+            log("[screen] bad crop: \(line)")
+            return
+        }
+        let box = ["x", "y", "w", "h"].compactMap { (message[$0] as? NSNumber)?.doubleValue }.filter(\.isFinite)
+        guard let number = (message["window"] as? NSNumber)?.uint32Value, box.count == 4 else {
+            log("[screen] bad crop: \(line)")
+            emit(["id": id, "ev": "error", "code": "bad_command"])
+            return
+        }
+        startCrop(id: id, window: number, asked: CGRect(x: box[0], y: box[1], width: box[2], height: box[3]))
     default:
         log("[screen] unknown command: \(cmd)")
     }

@@ -15,8 +15,9 @@ import { keyedOf, observeCommandOf, scrollOf } from "./screenWatch";
   reads the words in another app's window, for "Explain on screen" (explain.ts) and the
   lesson over that window (screenTeach.ts), and turns that window's pages. For the desktop
   companion (companion.ts) it also says which window the cursor is over, hears presses, taps
-  (a release at once, then the verdict) and scrolls on any window, and watches up to two windows
-  for a new look. One helper for the app's life, started on first use. A read or a turn is a
+  (a release at once, then the verdict), drags (a lift, with its stroke: circle to explain) and
+  scrolls on any window, watches up to two windows for a new look, and takes a picture of a part
+  of a window the student circled (cropScreen). One helper for the app's life, started on first use. A read or a turn is a
   request with an id and one answer (a turn given up is cancelled by its id); a status or
   Accessibility check has no id and is answered in order.
 
@@ -277,6 +278,25 @@ export interface ScreenPress {
   window: number;
 }
 
+/** With the companion on: the mouse came up after a drag (no tap) that began on an ordinary window,
+ *  where it came up and the stroke from the press (screen points, in order): circle to explain.
+ *  `private`: as a release's (main.swift "Circle to explain"). */
+export interface ScreenLift {
+  x: number;
+  y: number;
+  window: number;
+  points: Array<{ x: number; y: number }>;
+  private: boolean;
+}
+
+/** A picture of part of a window (cropScreen): a JPEG, base64, w x h pixels. */
+export interface ScreenCrop {
+  data: string;
+  type: "image/jpeg";
+  w: number;
+  h: number;
+}
+
 /** An observed window (observeWindows) settled into a new look: a page the student turned. */
 export interface ScreenChanged {
   window: number;
@@ -478,6 +498,16 @@ function onLine(line: string): void {
   if (msg.ev === "press") {
     if (finiteNumber(msg.x) && finiteNumber(msg.y) && typeof msg.window === "number") {
       watchEvents.emit("press", { x: msg.x, y: msg.y, window: msg.window } satisfies ScreenPress);
+    }
+    return;
+  }
+  if (msg.ev === "lift") {
+    if (finiteNumber(msg.x) && finiteNumber(msg.y) && typeof msg.window === "number") {
+      // (the stroke: [x, y] pairs)
+      const points = Array.isArray(msg.points)
+        ? (msg.points as unknown[]).flatMap((pt) => (Array.isArray(pt) && finiteNumber(pt[0]) && finiteNumber(pt[1]) ? [{ x: pt[0], y: pt[1] }] : []))
+        : [];
+      watchEvents.emit("lift", { x: msg.x, y: msg.y, window: msg.window, points: points.slice(0, 512), private: msg.private === true } satisfies ScreenLift);
     }
     return;
   }
@@ -731,6 +761,18 @@ export async function turnWindow(turn: ScreenTurn, signal?: AbortSignal): Promis
     front: typeof answer.front === "boolean" ? answer.front : null,
     still: typeof answer.still === "boolean" ? answer.still : null,
   };
+}
+
+/**
+ * A picture of part of `window` (a rectangle in screen points), the window alone, so nothing over it
+ * (Tutornote's own windows, any other) is in it: circle to explain's picture. Its longer side is
+ * 1024 pixels at the most. Fails with the helper's code (off, private, window_gone, bad_rect,
+ * no_permission, capture_failed).
+ */
+export async function cropScreen(r: { window: number; x: number; y: number; w: number; h: number }): Promise<ScreenCrop> {
+  const answer = await request({ cmd: "crop", ...r }, "crop", READ_TIMEOUT_MS);
+  if (typeof answer.data !== "string" || !finiteNumber(answer.w) || !finiteNumber(answer.h)) throw new ScreenReadError("capture_failed");
+  return { data: answer.data, type: "image/jpeg", w: answer.w, h: answer.h };
 }
 
 /** Tell the student's taps on this window, and which app is in front (watchEvents), until unwatchWindow. */
