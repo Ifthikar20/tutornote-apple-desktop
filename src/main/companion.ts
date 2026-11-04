@@ -269,6 +269,32 @@ function tellBlob(extra: { pop?: boolean } = {}, look: BlobLook = blobLook()): v
   else send();
 }
 
+/**
+ * The bubble pop as the tutor hops out of the blob and as it lands back in it (static/sounds/
+ * bubble_pop.mp3, played by the blob's page). An interface sound, so it keeps to the web app's
+ * Sounds switch (lib/sound/pref.ts: "an-sounds" set to "off" in the app's own storage), read from
+ * the lesson's window, which is the app's origin; with no page to ask, it plays.
+ */
+async function soundsOn(): Promise<boolean> {
+  const w = overlayWindow();
+  if (!w || w.isDestroyed() || w.webContents.isLoading()) return true;
+  try {
+    const said: unknown = await w.webContents.executeJavaScript(
+      '(() => { try { return localStorage.getItem("an-sounds") !== "off"; } catch (e) { return true; } })()',
+    );
+    return said !== false;
+  } catch {
+    return true;
+  }
+}
+
+function popSound(): void {
+  void soundsOn().then((ok) => {
+    const b = liveBlob();
+    if (ok && b) b.webContents.send("blob:sound");
+  });
+}
+
 /** The tab bar's button: the blob hidden, shown, or the tutor on. */
 function tellToolbar(): void {
   appEvents.emit("companion-state", !blobShown ? "hidden" : on ? "on" : "shown");
@@ -334,6 +360,8 @@ function ensureBlob(): BrowserWindow {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // (its pop as the tutor hops out and lands back: popSound; no click asks for it)
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
   // Above the lesson's window (floating +1) and its board (+0).
@@ -564,6 +592,8 @@ async function turnOn(): Promise<void> {
     greeted = false;
     const first = !companionTipped();
     showCompanionOverlay(area, blobCentre(), first);
+    // (the tutor hops out of the blob: its pop)
+    popSound();
     if (first) markCompanionTipped();
     stopKey = "";
     observeKey = "";
@@ -610,7 +640,11 @@ function turnOff(): void {
   }, HOME_MS);
   // The tutor is back in the blob once it has flown there.
   clearTimeout(lookTimer);
-  lookTimer = setTimeout(() => tellBlob(wasAway ? { pop: true } : {}), HOME_LOOK_MS);
+  lookTimer = setTimeout(() => {
+    tellBlob(wasAway ? { pop: true } : {});
+    // (the tutor lands back in the blob: its pop)
+    popSound();
+  }, HOME_LOOK_MS);
   tellToolbar();
   console.log("[companion] off");
 }
