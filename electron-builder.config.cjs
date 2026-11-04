@@ -1,7 +1,8 @@
 /*
   How the app is packaged. `npm run dist:mac` on a Mac gives release/Tutornote-<version>-universal.dmg
   (drag-to-Applications installer), a .zip of the same app for the updater, and latest-mac.yml,
-  the update feed. See the README for signing and notarising.
+  the update feed. See the README (Tutornote_test_suite, docs/apple-desktop/README.md) for signing
+  and notarising.
 */
 
 // Notarise only when Apple credentials are in the environment (CI secrets); otherwise
