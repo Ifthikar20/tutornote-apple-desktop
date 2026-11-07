@@ -5,12 +5,15 @@ import {
   BLOB_SIZE,
   blobUp,
   choiceOf,
+  circleAsked,
   clampBlobPlace,
   CLICK_TRAVEL,
   defaultBlobPlace,
   isEditorApp,
   isPrivateApp,
   labelBounds,
+  liftOf,
+  pickAsked,
   PRIVATE_APPS,
   READER_APPS,
   selectionKept,
@@ -18,6 +21,7 @@ import {
   tapOnWords,
   tapRoute,
   windowIdOf,
+  type Lift,
   type Point,
 } from "./companionPlace";
 import { overlayArea } from "./boardHost";
@@ -191,6 +195,12 @@ interface Glance {
 const glances = new Map<number, Glance>();
 /** The glances the page holds, as last sent (in its points of the time). */
 const pageHas = new Set<number>();
+/** The windows whose glances went to the page last, oldest first, and the window of the lesson's
+ *  latest read: the ones the page's dock mic may pick with the cursor on the dock (pickAsked). A
+ *  few, so a glance landing as the mic is pressed does not push out the one the page picked. */
+let glancedLast: number[] = [];
+const GLANCED_KEPT = 4;
+let lessonReadWindow: number | null = null;
 /** Glances being taken, by window; `again`: wanted afresh once this one is in (`keepAgain`: by
  *  the tap's own new look, so the card stays). */
 const inFlight = new Map<number, { again: boolean; keepAgain: boolean }>();
@@ -228,6 +238,11 @@ let cardTap: { window: number; at: number } | null = null;
  *  (`page`, decided at the release and kept for its verdict). */
 const releases = new Map<number, ScreenRelease & { at: number; page: boolean }>();
 const RELEASES_KEPT = 16;
+/** The latest drags heard end on an ordinary window that is not private (onLift), oldest first: the
+ *  only windows, and boxes, the page may read and picture for a circle (circleAsked). A few, so a
+ *  stray drag (a selection, a long press) while a ring is still being read keeps its picture. */
+let lifts: Lift[] = [];
+const LIFTS_KEPT = 4;
 let cursorFeed: NodeJS.Timeout | undefined;
 let lastCursor: Point | null = null;
 /** What the helper was last told: the windows it counts as Tutornote's, the windows it watches. */
@@ -673,6 +688,7 @@ function setHeld(value: boolean): void {
     pendingRead = null;
     carefulReads.clear();
     cardTap = null;
+    lifts = [];
     companionWatch(false, []);
     stopKey = "";
     observeKey = "";
@@ -708,6 +724,8 @@ function clearCaches(): void {
   changedGlance.clear();
   glances.clear();
   pageHas.clear();
+  glancedLast = [];
+  lessonReadWindow = null;
   inFlight.clear();
   windowApps.clear();
   privateWindows.clear();
@@ -717,6 +735,7 @@ function clearCaches(): void {
   windowMoved.clear();
   cardTap = null;
   releases.clear();
+  lifts = [];
   hovered = null;
   stopKey = "";
   observeKey = "";
@@ -770,6 +789,7 @@ function sendGlance(window: number, glance: Glance, keepCard = false, tap?: numb
     ...(empty ? { empty: true } : {}),
   });
   pageHas.add(window);
+  glancedLast = [...glancedLast.filter((w) => w !== window), window].slice(-GLANCED_KEPT);
 }
 
 function onOver(over: ScreenOver): void {
@@ -881,6 +901,7 @@ function onLessonRead(read: unknown): void {
   if (typeof r.window !== "number" || !Array.isArray(r.lines)) return;
   const kept: Glance = { read: r, at: Date.now(), stale: false };
   glances.set(r.window, kept);
+  lessonReadWindow = r.window;
   sendGlance(r.window, kept);
   refreshObserve();
 }
@@ -1286,7 +1307,7 @@ type ExplainAnswer = { ok: true } | { ok: false; reason: "off" | "private" | "fa
  *  for, whose careful read is the lesson's (carefulReads); without it, the last one taken for
  *  that window while the window has not scrolled or changed since the tap, else a read now (said
  *  stale when it has: the page realigns once the lesson is up). `row`: the tapped row's words as
- *  the page read them. */
+ *  the page read them. A window the student never pointed at, as this side heard them, is "bad". */
 async function explainAt(value: unknown): Promise<ExplainAnswer> {
   const p = (value ?? {}) as Record<string, unknown>;
   const choice = choiceOf(p.choice);
@@ -1294,10 +1315,19 @@ async function explainAt(value: unknown): Promise<ExplainAnswer> {
   if (!choice || typeof p.window !== "number" || !finite(p.x) || !finite(p.y)) return { ok: false, reason: "bad" };
   if (!on || held) return { ok: false, reason: "off" };
   const window = p.window;
+  const tap = finite(p.tap) ? p.tap : undefined;
+  // (a private one first, so the page shows its private card: this side holds a window as private
+  // only once the student was over it or tapped it, so that says nothing of any other window)
   if (privateWindows.has(window)) return { ok: false, reason: "private" };
+  // Only a window this side has seen the student at, never just an id the page names (pickAsked).
+  const tapped = tap !== undefined ? releases.get(tap)?.window : undefined;
+  const seen = { tapped, hovered: hovered?.window, glanced: glancedLast, lesson: lessonReadWindow, lifts };
+  if (!pickAsked(window, seen, Date.now())) {
+    console.warn("[companion] pick: not a window the student pointed at, refused");
+    return { ok: false, reason: "bad" };
+  }
   const at = screenPoint({ x: p.x, y: p.y });
   if (!at) return { ok: false, reason: "off" };
-  const tap = finite(p.tap) ? p.tap : undefined;
   const row = typeof p.row === "string" && p.row.trim() ? p.row.slice(0, ROW_CHARS) : undefined;
   // (the tap's own read, else the last one taken for a tap on that window, while that still shows
   // the window as it was tapped)
@@ -1354,7 +1384,9 @@ async function explainAt(value: unknown): Promise<ExplainAnswer> {
   "lift", with the drag's stroke): the page tells whether it was a ring round something to explain
   (the web app's lib/screen/circle.ts) and draws it. Not a drag on the page's own things (its card,
   its dock: the helper looks through them to the window below), nor while held. A private window's
-  says only that it is private: the page reads nothing there.
+  says only that it is private: the page reads nothing there. The drag is kept here (lifts) before
+  the page hears of it: what the page may read and picture for a ring is a drag of the student's,
+  never a window id it names itself.
 */
 function onLift(lift: ScreenLift): void {
   if (!on || held || pressWasThePage() || overlayInteractive()) return;
@@ -1362,16 +1394,22 @@ function onLift(lift: ScreenLift): void {
   if (!local) return;
   const info = windowApps.get(lift.window);
   const priv = lift.private || privateWindows.has(lift.window) || isPrivateApp(info?.bundle);
+  if (!priv) lifts = [...lifts, liftOf(lift, Date.now())].slice(-LIFTS_KEPT);
   const points = lift.points.map((p) => localPoint(p)).filter((p): p is Point => p !== null);
   sendToPage("screen-teach:lift", { window: lift.window, x: local.x, y: local.y, points, ...(priv ? { private: true } : {}) });
 }
 
 /** A careful read of a circled window (the page's circleRead), in the page's points, or null. It
- *  is the window's pending read, so a lesson started there from the circle (explainAt) takes it. */
+ *  is the window's pending read, so a lesson started there from the circle (explainAt) takes it.
+ *  Only of a window the student has just drawn round (circleAsked). */
 async function circleRead(value: unknown): Promise<ScreenRead | null> {
   const p = (value ?? {}) as Record<string, unknown>;
   if (typeof p.window !== "number" || !on || held) return null;
   const window = p.window;
+  if (!circleAsked(lifts, { window }, Date.now())) {
+    console.warn("[companion] circle read: not a window the student circled, refused");
+    return null;
+  }
   if (privateWindows.has(window) || isPrivateApp(windowApps.get(window)?.bundle)) return null;
   startCarefulRead(null, window);
   const mine = pendingRead;
@@ -1390,7 +1428,8 @@ async function circleRead(value: unknown): Promise<ScreenRead | null> {
 
 /** A picture of a circled rectangle (the page's points) of `window`, for the page's cropScreen: that
  *  window alone, so Tutornote's own windows are never in it. Null when the tutor is off or held,
- *  the window is private, or it cannot be taken. Only inside the page's own window. */
+ *  the window is private, or it cannot be taken. Only inside the page's own window, and inside a
+ *  ring the student has just drawn round that window (circleAsked, in screen points). */
 async function circleCrop(value: unknown): Promise<{ data: string; type: "image/jpeg"; w: number; h: number } | null> {
   const p = (value ?? {}) as Record<string, unknown>;
   const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -1405,6 +1444,10 @@ async function circleCrop(value: unknown): Promise<{ data: string; type: "image/
   if (w < 8 || h < 8) return null;
   const at = screenPoint({ x, y });
   if (!at) return null;
+  if (!circleAsked(lifts, { window: p.window, box: { x: at.x, y: at.y, w, h } }, Date.now())) {
+    console.warn("[companion] circle picture: not inside a ring the student drew, refused");
+    return null;
+  }
   try {
     const crop = await cropScreen({ window: p.window, x: at.x, y: at.y, w, h });
     console.log(`[companion] circle: picture ${crop.w}x${crop.h}, ${Math.round((crop.data.length * 3) / 4 / 1024)} KB`);
