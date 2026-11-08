@@ -1,0 +1,45 @@
+# Dependabot for the Mac app. GitHub reads this file from the repository's DEFAULT branch
+# only, and raises its security alerts (and opens its security-fix pull requests) from that
+# branch's package-lock.json. So the default branch must be the line releases are built from,
+# and must hold this file: until it does, nothing here runs. (On 2026-11-06 the default branch
+# is Feature/September, which has no copy of this file and September's lockfile, Electron 44.4.)
+#
+# What this file sets:
+#   - a weekly pull request batch for ordinary minor and patch updates (grouped, so it is
+#     one PR to review), opened against target-branch: the active line, feature/october.
+#     Electron's own security fixes ship as minor and patch releases of the major in use,
+#     so they come in this batch; a new Electron major comes on its own;
+#   - the grouping of security fixes into one PR. GitHub applies a package's settings to
+#     its security updates only while no target-branch is set, so with one set they come
+#     one by one, against the default branch;
+#   - a monthly PR for the actions .github/workflows/mac.yml runs. They are pinned to commits
+#     with the tag beside each; Dependabot moves both together.
+# Security fixes themselves are switched on in the repository's settings
+# (Code security: Dependabot alerts + Dependabot security updates), not here; they are
+# opened as soon as an advisory is published, whatever the schedule below says.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    target-branch: "feature/october"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      # every security fix that can ship together, in one PR
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+      # routine minor and patch updates, in one PR; majors come one by one
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    labels: ["dependencies"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "feature/october"
+    schedule:
+      interval: "monthly"
+    labels: ["dependencies"]

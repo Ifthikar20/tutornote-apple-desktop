@@ -18,6 +18,9 @@ build/helpers/
 *.key
 *.cer
 *.mobileprovision
+# App Store Connect API keys (AuthKey_<KEY ID>.p8) and the Mac's provisioning profiles
+*.p8
+*.provisionprofile
 # Tests are kept in Tutornote_test_suite (python sync.py copies them there); they still run
 # from here with npm test.
 /scripts/tests/
