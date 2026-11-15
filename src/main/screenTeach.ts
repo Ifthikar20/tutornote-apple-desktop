@@ -81,9 +81,12 @@ import {
   type ScreenPress,
   type ScreenRead,
   type ScreenScroll,
+  type ScreenSettled,
+  type ScreenShift,
   type ScreenTap,
   type ScreenTurn,
   type ScreenTurned,
+  type ScreenZoom,
 } from "./screen";
 import { rereadLine, toLocal, turnReadLine } from "./screenRead";
 import { nativeSpeechAvailable } from "./speech";
@@ -565,6 +568,7 @@ let mainOnTop = false;
 /** What the page was last told of the board's place, and what the Window menu last showed. */
 let lastPlaceSent = "";
 let lastMenuPlace: BoardWhere | null = null;
+let lastMenuUp = false;
 /** The board page's title, for its tab and its window. */
 let boardTitleNow = "Board";
 /** The host is unmaximized as the board moves into its tab: that tells the page nothing. */
@@ -596,9 +600,18 @@ app.on("before-quit", () => {
 });
 /** When a scroll over the board was last left out (logged once in a while, not per wheel tick). */
 let scrollDropLogged = 0;
+/** When the page was last told of a scroll left out (screen-teach:scroll-missed): once a while in a
+ *  run of them; the "settled" after it says when to read. */
+let scrollMissedAt = 0;
+const SCROLL_MISSED_MS = 150;
 /** What the board's window was last told (setIgnoreMouseEvents): its own, as it takes every click
  *  of its own but while a scroll is posted (applyMouse). */
 let boardIgnoring = false;
+/** The board's own window was last behind another app's window: shown or raised since, or not.
+ *  With Keep Board on Top off it is an ordinary window, and the student's click in another app
+ *  puts that app over it: a scroll or a tap where it lies is that app's then, not the board's
+ *  (overBoard). As on Windows. */
+let boardBehind = false;
 /*
   Where the board's window was a moment ago. The helper sends a tap only once the button is up and
   it has taken a picture of the window read (helpers/screen/main.swift, installWatch): by then the
@@ -710,12 +723,16 @@ function boardBeside(current: Lesson): void {
   from here: showInactive leaves the app being read in front (its menu bar stays), so nothing
   pauses because the board came up. Its first click counts (acceptFirstMouse), so a button on it
   works at once.
-  It floats at the "floating" level, under the lesson's window (+1): the pointer, the caption and
-  the lesson's dock still draw over it. Full screen would take it to a Space of its own, away from
-  the app being read: the green light zooms it to the work area instead (fullscreenable: false).
-  Minimizing it to the Dock would leave the lesson drawing on a board nobody sees, so the yellow
-  light is off. Its x, y, width and height from window.open are ignored by Electron anyway:
-  placeBoardFor places it.
+  It is an app's window of its own (the founder, 2026-11-14: "the board should be another
+  application"): a titled window at the ordinary level, in Mission Control and the Window menu, that
+  stays up while the student is in another app, goes behind the app they click, and minimizes to the
+  Dock with its yellow light (a board minimized stays there: a new drawing never pulls it back out).
+  Keep Board on Top (prefs.onTop, off unless the student turns it on: the Window menu, the board's
+  right-click menu) floats it at the "floating" level instead, under the lesson's window (+1), so
+  the pointer, the caption and the lesson's dock still draw over it (applyBoardLevel). Full screen
+  would take it to a Space of its own, away from the app being read: the green light zooms it to the
+  work area instead (fullscreenable: false). Its x, y, width and height from window.open are
+  ignored by Electron anyway: placeBoardFor places it.
   The page in it (the guest) has the lesson window's web preferences, which an about:blank popup
   takes as they are (context isolation, the sandbox, the preload): every call of the lesson's
   bridge checks it comes from the lesson's own window (fromLesson), so the board's copy of the
@@ -734,7 +751,7 @@ function hostOptions(): BaseWindowConstructorOptions {
     trafficLightPosition: { x: 14, y: 12 },
     resizable: true,
     movable: true,
-    minimizable: false,
+    minimizable: true,
     maximizable: true,
     fullscreenable: false,
     acceptFirstMouse: true,
@@ -742,6 +759,48 @@ function hostOptions(): BaseWindowConstructorOptions {
     backgroundColor: boardColor,
   };
 }
+
+/** The board's window floats over other apps only with Keep Board on Top (prefs.onTop); otherwise
+ *  it is an ordinary window. It is on every Space then, and over a full-screen app's Space while
+ *  the app being read is full screen (else it could not be seen beside it); an ordinary window
+ *  stays on its own Space, as any app's does. */
+function applyBoardLevel(b: Board): void {
+  const host = b.host;
+  if (host.isDestroyed()) return;
+  const onTop = prefs.onTop === true;
+  host.setAlwaysOnTop(onTop, "floating", 0);
+  if (onTop) boardBehind = false;
+  const full = lesson ? reading(lesson).full : false;
+  host.setVisibleOnAllWorkspaces(onTop || full, { visibleOnFullScreen: true });
+}
+
+/** Keep Board on Top, now (the Window menu's check). */
+export const boardOnTopNow = (): boolean => prefs.onTop === true;
+
+/** Keep Board on Top turned on or off by the student: kept for later lessons. */
+export function setBoardOnTop(onTop: boolean): void {
+  if ((prefs.onTop === true) === onTop) return;
+  prefs.onTop = onTop;
+  saveBoardPrefs({ onTop });
+  const b = liveBoard();
+  if (b) applyBoardLevel(b);
+  appEvents.emit("board-place-changed");
+  console.log(`[screen-teach] board on top: ${onTop ? "on" : "off"}`);
+}
+
+/** The Window menu's Board: the board's own window in front with the keys, out of the Dock if it
+ *  was minimized there. Only while it is in its own window with something on it. */
+export function showScreenBoard(): void {
+  const b = liveBoard();
+  if (!b || b.place !== "float" || !boardUp) return;
+  if (b.host.isMinimized()) b.host.restore();
+  b.host.show();
+  b.host.focus();
+  b.contents.focus();
+}
+
+/** Whether the board is in its own window with something on it (the Window menu's Board). */
+export const boardWindowUp = (): boolean => Boolean(liveBoard()?.place === "float" && boardUp);
 
 /** The view fills its window's content (after every move into it: a view keeps the bounds it had). */
 function fitHost(b: Board): void {
@@ -775,10 +834,22 @@ function adoptBoard(opener: BrowserWindow, options: BrowserWindowConstructorOpti
   // A new window takes clicks; one made while a scroll is posted lets them through at once.
   boardIgnoring = false;
   applyMouse();
-  host.setAlwaysOnTop(true, "floating", 0);
-  // Over a full-screen app's Space too, as the lesson's window (ensureWindow says what that costs:
-  // once per window, and the board is kept for the lesson window's life).
-  host.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // An ordinary window, or floating with Keep Board on Top; over a full-screen app's Space too when
+  // that is where the app being read is (applyBoardLevel; ensureWindow says what that costs).
+  applyBoardLevel(b);
+  // (an ordinary window: the student's click in another app puts that app over it; the keys going
+  // to another of Tutornote's windows leave it where it is)
+  host.on("focus", () => {
+    boardBehind = false;
+  });
+  host.on("blur", () => {
+    setImmediate(() => {
+      if (prefs.onTop !== true && board === b && !BaseWindow.getFocusedWindow()) boardBehind = true;
+    });
+  });
+  host.on("restore", () => {
+    boardBehind = false;
+  });
   contents.setZoomMode("isolated");
   // (the student's text size for the board, View > Zoom In: menu.ts)
   contents.setZoomLevel(prefs.zoom);
@@ -900,6 +971,7 @@ function teardownBoard(b: Board): void {
 function dropBoardState(b: Board): void {
   teardownBoard(b);
   board = null;
+  boardBehind = false;
   placedRun = -1;
   boardAt = null;
   decidedRun = -1;
@@ -1039,13 +1111,14 @@ function syncBoard(): void {
   if (!b) return;
   const w = live();
   if (!lesson || !w || !pageReady) return foldBoard(b, !lesson ? "the lesson ended" : "the lesson's page is not ready");
-  const why = !w.isVisible()
+  // (the student in another app keeps it up: it is an app's window of its own, which they leave
+  // behind that app or minimize as they like; the lesson's window hidden while they are away is
+  // no reason to hide it)
+  const why = !w.isVisible() && !aside
     ? "the lesson is not on screen"
     : lesson.switching
       ? "another document is on screen"
-      : aside
-        ? "the student is in another app"
-        : boardRun !== lesson.run || !boardWanted
+      : boardRun !== lesson.run || !boardWanted
           ? "nothing on it"
           : closeHold?.run === lesson.run
             ? "the student has just closed it"
@@ -1068,18 +1141,21 @@ function syncBoard(): void {
   }
   const host = b.host;
   if (b.place === "float") {
-    if (up && !host.isVisible()) {
+    // (minimized by the student: it stays in the Dock until they bring it back)
+    if (up && !host.isVisible() && !host.isMinimized()) {
       if (placedRun !== lesson.run) {
         placeBoardFor(host, lesson);
         placedRun = lesson.run;
       }
+      applyBoardLevel(b);
       host.showInactive();
+      boardBehind = false;
       boardAt = host.getBounds();
       applyZoom();
       // (a window made by this module raises no browser-window-created: companion.ts hears it here)
       appEvents.emit("screen-board-shown");
       console.log(`[screen-teach] board shown (run ${lesson.run})`);
-    } else if (!up && host.isVisible()) {
+    } else if (!up && (host.isVisible() || host.isMinimized())) {
       noteBoardPlace();
       host.hide();
       console.log(`[screen-teach] board hidden: ${why}`);
@@ -1101,7 +1177,7 @@ function foldBoard(b: Board, why: string): void {
   inBar = false;
   covering = false;
   homeView(b);
-  if (b.host.isVisible()) {
+  if (b.host.isVisible() || b.host.isMinimized()) {
     noteBoardPlace();
     b.host.hide();
   }
@@ -1251,11 +1327,13 @@ function sendPlace(): void {
   if (p) live()?.webContents.send("screen-teach:board-place", p);
 }
 
-/** The Window menu's board item follows boardPlaceNow (menu.ts rebuilds it). */
+/** The Window menu's board items follow boardPlaceNow and boardWindowUp (menu.ts rebuilds it). */
 function noteMenuPlace(): void {
   const now = boardPlaceNow();
-  if (now === lastMenuPlace) return;
+  const up = boardWindowUp();
+  if (now === lastMenuPlace && up === lastMenuUp) return;
   lastMenuPlace = now;
+  lastMenuUp = up;
   appEvents.emit("board-place-changed");
 }
 
@@ -1408,6 +1486,9 @@ function showBoardMenu(contents: WebContents, params: ContextMenuParams): void {
   if (b.place === "tab" || (pageKnowsPlace && place?.canMove)) {
     moves.push({ label: b.place === "tab" ? BOARD_COPY.popOut : BOARD_COPY.showIn, click: () => toggleBoardPlace() });
   }
+  if (b.place === "float") {
+    moves.push({ label: BOARD_COPY.onTop, type: "checkbox", checked: boardOnTopNow(), click: () => setBoardOnTop(!boardOnTopNow()) });
+  }
   moves.push({ label: BOARD_COPY.close, click: () => closeScreenBoard() });
   groups.push(moves);
   const items = groups
@@ -1423,7 +1504,8 @@ function showBoardMenu(contents: WebContents, params: ContextMenuParams): void {
 function overBoard(p: Point, recently = false): boolean {
   const on = (r: Rectangle): boolean => p.x >= r.x && p.x < r.x + r.width && p.y >= r.y && p.y < r.y + r.height;
   const host = liveBoard()?.host;
-  if (host && host.isVisible() && on(host.getBounds())) return true;
+  // (minimized, or an ordinary window another app went over: what is there is that app's)
+  if (host && host.isVisible() && !host.isMinimized() && !boardBehind && on(host.getBounds())) return true;
   if (!recently) return false;
   const now = Date.now();
   return boardWas.some((was) => was.until > now && on(was.bounds));
@@ -2159,12 +2241,20 @@ function onScroll(scroll: ScreenScroll): void {
       if (current.switching === s) readAgain(current, "the student scrolled it");
     }, SWITCH_SCROLL_MS);
   }
-  if (!current || !w || scroll.window !== current.window || aside || scrolling > 0 || !w.isVisible()) return;
+  if (!current || !w || scroll.window !== current.window) return;
   // (sideways too, a pan across a zoomed page: the page goes with it as it does up and down. A page
   // a swipe turns, in an app that turns by the page, is said as a new look: observePaged)
   if (scroll.dy === 0 && scroll.dx === 0) return;
+  // A scroll not passed on (the lesson aside or hidden, a turn of its own posted): the page is told
+  // it missed one, so it reads the window again before it shows any mark (once the window settles),
+  // never draws where the words were (the founder, 2026-11-14: a scroll "displaces").
+  if (aside || scrolling > 0 || !w.isVisible()) return scrollMissed(current, w);
   // Scrolling the board, over the page being read, moves the board, not the page's words (a
-  // scroll comes with no point: the pointer is where it was made).
+  // scroll comes with no point: the pointer is where it was made). The helper looks through
+  // Tutornote's own windows and said the lesson's window, but the wheel went to the board in front
+  // (overBoard leaves out a board behind or minimized): nothing of the page moved, so nothing is
+  // hidden or read again. Should the window have moved all the same, the helper's "changed" and
+  // "settled" for it say so.
   const cursor = screen.getCursorScreenPoint();
   if (overBoard(cursor) || overMain(cursor)) {
     const now = Date.now();
@@ -2175,6 +2265,63 @@ function onScroll(scroll: ScreenScroll): void {
   // (`lines`: a mouse wheel's, by which the page learns how far a line moves this app; 0 for a
   // trackpad's points)
   w.webContents.send("screen-teach:scroll", { run: current.run, dy: scroll.dy, dx: scroll.dx, lines: scroll.lines });
+}
+
+/** The page hears of a scroll of its lesson's window it was not sent (screen-teach:scroll-missed),
+ *  at most every SCROLL_MISSED_MS in a run of them. Not while another document is read there. */
+function scrollMissed(current: Lesson, w: BrowserWindow): void {
+  if (!pageReady || current.switching) return;
+  const now = Date.now();
+  if (now - scrollMissedAt < SCROLL_MISSED_MS) return;
+  scrollMissedAt = now;
+  w.webContents.send("screen-teach:scroll-missed", { run: current.run, window: current.window });
+}
+
+/**
+ * The lesson's window is still again after it moved (screen.ts "settled": a scroll, a zoom, a new
+ * look, from a helper that says it): the page reads it now, rather than on a guessed timer after
+ * the last wheel (screen-teach:settled). Sent while aside too: the page keeps it for its return. A
+ * switch waiting for words in the window scrolled reads it again now (as SWITCH_SCROLL_MS would).
+ */
+function onLessonSettled(settled: ScreenSettled): void {
+  const current = lesson;
+  const w = live();
+  if (!current || !w || !pageReady) return;
+  const s = current.switching;
+  if (s) {
+    if (s.waitingFor === "words" && settled.window === s.target) {
+      clearTimeout(switchScroll);
+      readAgain(current, "the window settled");
+    }
+    return;
+  }
+  if (settled.window !== current.window) return;
+  w.webContents.send("screen-teach:settled", { run: current.run, window: settled.window });
+}
+
+/** A zoom on a wheel over the lesson's window (screen.ts "zoom"): never a scroll. The page hears
+ *  it (its marks are no longer on the words until it reads the window again, once settled). */
+function onLessonZoom(zoom: ScreenZoom): void {
+  const current = lesson;
+  const w = live();
+  if (!current || !w || !pageReady || current.switching || zoom.window !== current.window) return;
+  w.webContents.send("screen-teach:zoom", { run: current.run, window: zoom.window });
+}
+
+/** The content's true move measured from its pixels (screen.ts "shift"): Windows' helper alone
+ *  says it, so on this Mac it never comes; passed on all the same, so one page serves both. */
+function onLessonShift(shift: ScreenShift): void {
+  const current = lesson;
+  const w = live();
+  if (!current || !w || !pageReady || current.switching || shift.window !== current.window) return;
+  // (lost: the helper's match was refused, so the page reads the window again, as for a scroll it
+  // never heard)
+  if (shift.lost) {
+    scrollMissedAt = 0;
+    return scrollMissed(current, w);
+  }
+  if (aside || scrolling > 0) return scrollMissed(current, w);
+  w.webContents.send("screen-teach:shift", { run: current.run, window: shift.window, dy: shift.dy, dx: shift.dx, settled: shift.settled });
 }
 
 /**
@@ -2195,8 +2342,11 @@ function onScroll(scroll: ScreenScroll): void {
  * waitSwitch), it is read again.
  */
 function onFront(pid: number): void {
+  const was = frontPid;
   frontPid = pid;
   if (pid !== process.pid) mainOnTop = false;
+  // (another app in front: an ordinary board window, not the one with the keys, is under it now)
+  if (pid !== process.pid && pid !== was && prefs.onTop !== true && !liveBoard()?.host.isFocused()) boardBehind = true;
   const current = lesson;
   const s = current?.switching;
   if (current && s?.why === "app" && pid === current.pid) {
@@ -2624,11 +2774,15 @@ function onLessonChanged(changed: ScreenChanged): void {
   const w = live();
   if (!current || !w || !pageReady) return;
   if (current.switching) {
-    if (current.switching.waitingFor === "words" && changed.window === current.switching.target) readAgain(current, "a new look");
+    // (a wheel's new look: the switch reads it once the window settles, onLessonSettled)
+    if (current.switching.waitingFor === "words" && changed.window === current.switching.target && !changed.explained) readAgain(current, "a new look");
     return;
   }
   if (changed.window !== current.window) return;
-  w.webContents.send("screen-teach:changed", { run: current.run, window: changed.window });
+  // (`explained`: a wheel just sent explains the new look, said now by a newer helper rather than
+  // kept back: the page corrects its follow by it rather than taking a page turn; while it still
+  // follows that scroll it only reads again what it was reading, and waits for screen-teach:settled)
+  w.webContents.send("screen-teach:changed", { run: current.run, window: changed.window, ...(changed.explained ? { explained: true } : {}) });
 }
 
 /** The lesson's own ⌃⌥ keys (SHORTCUTS, the talk key) pressed this long ago or less: the key the
@@ -3132,6 +3286,10 @@ export function installScreenTeach(): void {
   // its page follows (with the companion on or off).
   watchEvents.on("ident", onIdent);
   watchEvents.on("changed", onLessonChanged);
+  // (and still again after a move, a zoom on a wheel, and on Windows the content's measured move)
+  watchEvents.on("settled", onLessonSettled);
+  watchEvents.on("zoom", onLessonZoom);
+  watchEvents.on("shift", onLessonShift);
   // (and a key pressed in its app, before the new look it may bring is still)
   watchEvents.on("keyed", onLessonKeyed);
   // The talk chord, while the talk key is on (registerTalkKey), and whether it can be used.

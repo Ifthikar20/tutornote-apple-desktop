@@ -179,15 +179,21 @@
                                                    on an ordinary window (at once, before any
                                                    picture); with it off, on the watched window
                                                    alone
-         {"ev":"lift","x":…,"y":…,"window":12345,"points":[[x,y],…],"private":false}
-                                                   with the companion on: the button came up
+         {"ev":"lift","x":…,"y":…,"window":12345,"points":[[x,y],…],"private":false,
+          "ring":true,"fx":…,"fy":…}               with the companion on: the button came up
                                                    after a drag (no tap: it went 5 points or
                                                    more, or was held 0.7 s or longer) that began
                                                    on an ordinary window ("window": the press's);
                                                    "points": its stroke from the press, LIFT_POINTS
                                                    at most, its first and last among them (the
                                                    app's page tells a ring from it); "private":
-                                                   as a release's. Nothing is judged here
+                                                   as a release's; "ring": false for an open drag
+                                                   (a selection: SELECT_TRAVEL_PT or more from
+                                                   the press, not coming back round), "fx", "fy"
+                                                   where it was pressed. A drag that stayed
+                                                   within NEAR_TAP_PT either way is no lift: it
+                                                   is said as a tap ("release", then "tap").
+                                                   Nothing is judged here
          {"id":3,"ev":"crop","data":"…","type":"image/jpeg","w":640,"h":480,"cropMs":40}
                                                    the picture: a JPEG, base64, w x h pixels, its
                                                    longer side CROP_MOST at most
@@ -198,12 +204,24 @@
                                                    password field somewhere has the keys
          {"ev":"changed","window":12345,"settleMs":300}
                                                    an observed window settled into a new look
-                                                   (once, until it looks different again) that
-                                                   no wheel scroll told already explains (one
-                                                   up or down, in a window not observed as
-                                                   "page"); its middle rows only (a change in
-                                                   its top and bottom 12% alone, a reader's
-                                                   bars, is none)
+                                                   (once, until it looks different again); its
+                                                   middle rows only (a change in its top and
+                                                   bottom 12% alone, a reader's bars, is none).
+                                                   "explained": true when a wheel scroll told
+                                                   already explains it (one up or down, in a
+                                                   window not observed as "page"): the app
+                                                   follows that scroll, and decides
+         {"ev":"settled","window":12345,"settleMs":300}
+                                                   an observed window that was scrolled, zoomed
+                                                   or changing is still again: two looks in a
+                                                   row agree, both taken SETTLE_GRACE_S or more
+                                                   after the last wheel on it (settleMs: since it
+                                                   began to move). After any such motion, once
+         {"ev":"zoom","window":12345,"notches":1}  Command held on a mouse wheel's notch over
+                                                   the window a scroll would be said for: a
+                                                   zoom, never said as a scroll (notches in the
+                                                   wheel's lines' sense). A trackpad's pinch is
+                                                   no wheel, and is left as it was
          {"ev":"keyed","window":12345}             a key went down in the watched window's app,
                                                    in front, that window observed (the first of
                                                    a run of keys, then one at most every
@@ -734,7 +752,10 @@ func read(id: Int, which: Which, level: Level = .accurate) async {
         // since (unlessMoved) compares with this, and so does the companion's watch for a new
         // look (observe). Its brightness is the page's ground.
         seen = taken.thumb
-        if let seen { remember(target.id, seen) }
+        // (a glance of a window still moving, a fast read mid-scroll, is no baseline for the watch:
+        // the new look it settles into would be kept back as already seen. A careful read, or one
+        // once it is still, is)
+        if let seen, !(level == .fast && windowMoving(target.id)) { remember(target.id, seen) }
     } catch {
         log("[screen] capture failed: \(error.localizedDescription)")
         emit(["id": id, "ev": "error", "code": "capture_failed"])
@@ -1762,15 +1783,31 @@ func installWatch() {
                 window = only
             }
             let step = wheelStep(deltaY: Double(event.scrollingDeltaY), deltaX: Double(event.scrollingDeltaX), precise: event.hasPreciseScrollingDeltas)
+            // Command on a mouse wheel's notch zooms in the apps that zoom by it (Preview, a
+            // browser's PDF): never a scroll, which would move the lesson's marks by a notch's
+            // points over words that grew instead (the founder, 2026-11-14: the tutor over another
+            // app should be "ridiculously precise"). Its new look is said ("changed", unexplained),
+            // and once still ("settled"). A trackpad's pinch is no wheel event.
+            if event.modifierFlags.contains(.command) && !event.hasPreciseScrollingDeltas {
+                if step.lines != 0 {
+                    emit(["ev": "zoom", "window": Int(window), "notches": step.lines])
+                    moving(window, at: now)
+                }
+                burst(window)
+                return
+            }
             if step.dy != 0 || step.dx != 0 {
                 emit(["ev": "scroll", "dy": step.dy, "dx": step.dx, "lines": step.lines, "momentum": !event.momentumPhase.isEmpty, "window": Int(window)])
+                // (moving from now until it is still: "settled")
+                moving(window, at: now)
+                // (told already: the new look it settles into is said as explained. The companion
+                // off too: the lesson's window is observed for every lesson now. Only a move up or
+                // down is, and only one said to the app (an event that moved nothing, fingers set
+                // down or lifted, is none): a pan or a swipe sideways leaves the new look to be
+                // said, as a key's is; and in a window observed as turning by the page, no wheel
+                // explains one: scrollExplains)
+                if let at = wheelScrolledAt(step, now: now) { scrolled(window, at: at) }
             }
-            // (told already: the new look it settles into is no "changed". The companion off too: the
-            // lesson's window is observed for every lesson now. Only a move up or down is: a pan
-            // or a swipe sideways, and an event that moved nothing (fingers set down or lifted),
-            // leave the new look to be said, as a key's is; and in a window observed as turning by
-            // the page, no wheel explains one: scrollExplains)
-            if let at = wheelScrolledAt(step, now: now) { scrolled(window, at: at) }
             burst(window)
             return
         }
@@ -1831,11 +1868,18 @@ func installWatch() {
         watchPress = nil
         guard now - pressed.time < 0.7, hypot(point.x - pressed.point.x, point.y - pressed.point.y) < 5 else {
             // No tap: a drag (a selection, a ring drawn round something), or a long press. With the
-            // companion on it is said ("lift") with its stroke, and the app's page tells whether it
-            // is a ring; nothing is judged here.
+            // companion on it is said ("lift") with its stroke and where it was pressed, and the
+            // app's page tells whether it is a ring (an open drag is said as a selection: "ring"
+            // false); nothing is judged here. One that stayed within NEAR_TAP_PT either way (a
+            // tap that slid a little, a press held still) is a tap after all, said as one (the
+            // founder, 2026-11-14: "it doesn't pick up from there").
             if companionOn, var stroke {
                 dragAdd(&stroke.points, point)
-                emit(liftFields(stroke, at: point))
+                if dragExtent(stroke.points + [pressed.point, point]) < NEAR_TAP_PT {
+                    companionTap(at: point, alt: event.modifierFlags.contains(.option), clicks: event.clickCount, hand: hand, before: before)
+                } else {
+                    emit(liftFields(stroke, at: point, from: pressed.point))
+                }
             }
             return
         }
@@ -3093,9 +3137,13 @@ func quickThumbnail(_ id: CGWindowID, frame: CGRect) async -> [UInt8]? {
   is going on, and for TURN_QUIET_S after (the lesson reads it then itself).
 
   A new look that a wheel scroll of the window explains (one began within SCROLL_EXPLAINS_S of
-  the student's last scroll up or down there, which the app was told: "scroll") is no "changed":
-  the app follows the scroll itself, and a "changed" would hide the lesson's marks for a careful
-  reread after every scroll. Keys and a dragged scroll bar send no wheel, and are said; so is a
+  the student's last scroll up or down there, which the app was told: "scroll") is said with
+  "explained" (the founder, 2026-11-14: a new look kept back after a scroll left a mark that
+  landed mid-scroll uncorrected): the app follows the scroll itself, and decides what the new look
+  means. Whatever moved it (a wheel, a zoom, a key, a scroll bar), a window is said to be still
+  again ("settled") once two looks in a row agree, both taken SETTLE_GRACE_S or more after the last
+  wheel on it: the app reads it then, rather than on a guessed timer.
+  Keys and a dragged scroll bar send no wheel, and are said; so is a
   sideways pan or swipe (wheelStep), which moves no line up or down. In a window the app observes
   as turning by the page ("page": a lesson in Kindle or Books, or in an app a key turned) no wheel
   explains a new look: a wheel or a swipe there turns a whole page, which nothing follows from the
@@ -3125,6 +3173,13 @@ var firstLook: [CGWindowID: [UInt8]] = [:]
 var toldLook: [CGWindowID: [UInt8]] = [:]
 var differentSince: [CGWindowID: TimeInterval] = [:]
 var scrolledAt: [CGWindowID: TimeInterval] = [:]
+/// Per window: since when it has been moving (a wheel said, a zoom, a new look on its way) with no
+/// "settled" said yet, and when the last wheel on it came.
+var motionSince: [CGWindowID: TimeInterval] = [:]
+var motionInputAt: [CGWindowID: TimeInterval] = [:]
+/// Both looks that agree, for "settled", are taken at least this long after the last wheel: a
+/// browser's smooth scroll has begun to move by then.
+let SETTLE_GRACE_S: TimeInterval = 0.05
 /// The windows observed now that turn by the page ("observe"'s "page").
 var pagedObserved: Set<CGWindowID> = []
 /// The windows no longer watched whose looks are kept, the latest last.
@@ -3194,11 +3249,27 @@ func latestThumb(_ window: CGWindowID, within: TimeInterval? = nil) -> (thumb: [
     return (thumb, age)
 }
 
-/// The student scrolled `window` with the wheel (or a trackpad), as told ("scroll").
+/// The student scrolled `window` with the wheel (or a trackpad), as told ("scroll"): only a wheel
+/// said to the app explains a new look.
 func scrolled(_ window: CGWindowID, at time: TimeInterval) {
     observeLock.lock()
     scrolledAt[window] = time
     observeLock.unlock()
+}
+
+/// A wheel said to the app (a scroll, a zoom) moved `window` at `time`: moving until "settled".
+func moving(_ window: CGWindowID, at time: TimeInterval) {
+    observeLock.lock()
+    if motionSince[window] == nil { motionSince[window] = time }
+    motionInputAt[window] = time
+    observeLock.unlock()
+}
+
+/// Whether `window` is moving (moving, or a new look on its way), with no "settled" said yet.
+func windowMoving(_ window: CGWindowID) -> Bool {
+    observeLock.lock()
+    defer { observeLock.unlock() }
+    return motionSince[window] != nil
 }
 
 /// Watch `windows` (two at most) for a new look; `paged`: those of them that turn by the page.
@@ -3213,6 +3284,8 @@ func observeWindows(_ windows: [CGWindowID], paged: Set<CGWindowID> = []) {
         lookDue[gone] = nil
         previousLook[gone] = nil
         differentSince[gone] = nil
+        motionSince[gone] = nil
+        motionInputAt[gone] = nil
         unobserved.removeAll { $0 == gone }
         unobserved.append(gone)
     }
@@ -3283,6 +3356,8 @@ func looked(_ window: CGWindowID, _ look: [UInt8]) {
     let base = lastSeen(window)
     let now = ProcessInfo.processInfo.systemUptime
     observeLock.lock()
+    // (when the look before this one was taken: the settle test's)
+    let previousAt = latestLookAt[window]
     latestLook[window] = look
     latestLookAt[window] = now
     let previous = previousLook[window]
@@ -3293,15 +3368,20 @@ func looked(_ window: CGWindowID, _ look: [UInt8]) {
     let different = middleDifference(from, look, width: THUMB_WIDE) > CHANGED_ABOVE
     let newSinceTold = toldLook[window].map { middleDifference($0, look, width: THUMB_WIDE) > CHANGED_ABOVE } ?? true
     var settleMs: Int?
+    var explained = false
+    let still = previous.map { meanDifference($0, look) < SETTLED_BELOW } ?? false
     if different && newSinceTold {
         let since = differentSince[window] ?? now
         differentSince[window] = since
-        if let previous, meanDifference(previous, look) < SETTLED_BELOW {
+        // (a new look on its way: moving, until "settled")
+        if motionSince[window] == nil { motionSince[window] = since }
+        if still {
             toldLook[window] = look
             differentSince[window] = nil
-            // (a wheel scroll's new look: the app follows it from the scroll itself; never a page
-            // turned by the wheel or a swipe in a window that turns by the page)
-            if !scrollExplains(since: since, scrolled: scrolledAt[window], page: pagedObserved.contains(window)) { settleMs = Int((now - since) * 1000) }
+            settleMs = Int((now - since) * 1000)
+            // (a wheel scroll's new look: the app follows it from the scroll itself, told so; never
+            // a page turned by the wheel or a swipe in a window that turns by the page)
+            explained = scrollExplains(since: since, scrolled: scrolledAt[window], page: pagedObserved.contains(window))
         } else if keepsBursting(since: since, now: now) {
             // Changing (a key turned the page, which nothing else hears): looked at often until
             // it is still, so the new page is said within a tenth of a second of settling. Not
@@ -3312,8 +3392,22 @@ func looked(_ window: CGWindowID, _ look: [UInt8]) {
     } else {
         differentSince[window] = nil
     }
+    // Still again after it moved: two looks in a row agree, the first of them taken SETTLE_GRACE_S
+    // or more after the last wheel on it (a look taken before the content began to move agrees
+    // with the one before the wheel too).
+    var settledMs: Int?
+    if still, let since = motionSince[window], let previousAt, previousAt >= (motionInputAt[window] ?? since) + SETTLE_GRACE_S {
+        settledMs = Int((now - since) * 1000)
+        motionSince[window] = nil
+        motionInputAt[window] = nil
+    }
     observeLock.unlock()
-    if let settleMs { emit(["ev": "changed", "window": Int(window), "settleMs": settleMs]) }
+    if let settleMs {
+        var changed: [String: Any] = ["ev": "changed", "window": Int(window), "settleMs": settleMs]
+        if explained { changed["explained"] = true }
+        emit(changed)
+    }
+    if let settledMs { emit(["ev": "settled", "window": Int(window), "settleMs": settledMs]) }
 }
 
 /*
@@ -3493,12 +3587,48 @@ func liftPoints(_ stroke: [CGPoint], most: Int) -> [CGPoint] {
     return (0..<most).map { stroke[Int((Double($0) * step).rounded())] }
 }
 
-/// The lift for `stroke`, ended at `point`.
-func liftFields(_ stroke: Drag, at point: CGPoint) -> [String: Any] {
-    [
+/// A drag that stayed within this many points either way, from its press to its lift, is a tap.
+let NEAR_TAP_PT: CGFloat = 12
+/// A drag this far or more from its press to its lift, in points, that does not come back round
+/// (its lift SELECT_OPEN or more of its extent from its press), is a selection, never a ring. The
+/// near tap's own reach: a short drag across one word is a selection, never nothing at all.
+let SELECT_TRAVEL_PT: CGFloat = NEAR_TAP_PT
+let SELECT_OPEN: CGFloat = 0.75
+
+/// The larger side of the box round `stroke`, in points (0 for none).
+func dragExtent(_ stroke: [CGPoint]) -> CGFloat {
+    guard let first = stroke.first else { return 0 }
+    var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
+    for p in stroke {
+        minX = min(minX, p.x)
+        maxX = max(maxX, p.x)
+        minY = min(minY, p.y)
+        maxY = max(maxY, p.y)
+    }
+    return max(maxX - minX, maxY - minY)
+}
+
+/// Whether a drag pressed at `from` and lifted at `to`, with `stroke`, is an open one: a selection
+/// dragged across words, never a ring round them (which comes back near where it began).
+func dragIsSelection(_ stroke: [CGPoint], from: CGPoint, to: CGPoint) -> Bool {
+    let travel = hypot(to.x - from.x, to.y - from.y)
+    guard travel >= SELECT_TRAVEL_PT else { return false }
+    return travel >= SELECT_OPEN * max(dragExtent(stroke + [from, to]), 1)
+}
+
+/// The lift for `stroke`, ended at `point`; `from`: where it was pressed (then "ring" and "fx",
+/// "fy" are said too: a helper older than them says rings alone).
+func liftFields(_ stroke: Drag, at point: CGPoint, from: CGPoint? = nil) -> [String: Any] {
+    var fields: [String: Any] = [
         "ev": "lift", "x": Double(point.x), "y": Double(point.y), "window": Int(stroke.window), "private": stroke.hidden,
         "points": liftPoints(stroke.points, most: LIFT_POINTS).map { [tenths(Double($0.x)), tenths(Double($0.y))] },
     ]
+    if let from {
+        fields["ring"] = !dragIsSelection(stroke.points, from: from, to: point)
+        fields["fx"] = Double(from.x)
+        fields["fy"] = Double(from.y)
+    }
+    return fields
 }
 
 /// `asked` (screen points) in the window at `frame`'s own points (its top left 0, 0), clipped to
@@ -3821,6 +3951,16 @@ func circleSelfTest(_ check: (String, Bool) -> Void) {
     let fields = liftFields(Drag(window: 7, hidden: false, points: stroke), at: CGPoint(x: end, y: 10))
     check("a lift is valid JSON with its points as pairs",
           JSONSerialization.isValidJSONObject(fields) && (fields["points"] as? [[Double]])?.count == LIFT_POINTS)
+    check("a lift with no press point says no ring (a ring, to the app)", fields["ring"] == nil && fields["fx"] == nil)
+    let line = [CGPoint(x: 10, y: 10), CGPoint(x: 60, y: 12), CGPoint(x: 120, y: 14)]
+    let selected = liftFields(Drag(window: 7, hidden: false, points: line), at: CGPoint(x: 120, y: 14), from: CGPoint(x: 10, y: 10))
+    check("a drag across a line is a selection, with where it was pressed",
+          JSONSerialization.isValidJSONObject(selected) && (selected["ring"] as? Bool) == false && (selected["fx"] as? Double) == 10)
+    let ring = [CGPoint(x: 100, y: 100), CGPoint(x: 160, y: 100), CGPoint(x: 160, y: 160), CGPoint(x: 100, y: 160), CGPoint(x: 104, y: 106)]
+    check("a ring that comes back round is no selection", !dragIsSelection(ring, from: CGPoint(x: 100, y: 100), to: CGPoint(x: 104, y: 106)))
+    check("a drag under 12 points is no selection", !dragIsSelection([CGPoint(x: 10, y: 10), CGPoint(x: 20, y: 10)], from: CGPoint(x: 10, y: 10), to: CGPoint(x: 20, y: 10)))
+    check("a short drag across one word (15 points) is a selection", dragIsSelection([CGPoint(x: 10, y: 10), CGPoint(x: 25, y: 10)], from: CGPoint(x: 10, y: 10), to: CGPoint(x: 25, y: 10)))
+    check("a drag within 12 points either way is a tap's", dragExtent([CGPoint(x: 0, y: 0), CGPoint(x: 8, y: 5)]) < NEAR_TAP_PT)
     let frame = CGRect(x: 100, y: 50, width: 800, height: 600)
     check("a crop is taken in the window's own points, clipped to it",
           cropSource(CGRect(x: 80, y: 100, width: 200, height: 100), frame: frame) == CGRect(x: 0, y: 50, width: 180, height: 100))

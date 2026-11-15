@@ -6,13 +6,17 @@ import { appEvents } from "./events";
 import { openExternal } from "./links";
 import { microphoneAnswer, setMicrophoneAnswer } from "./microphone";
 import {
+  boardOnTopNow,
   boardPlaceNow,
+  boardWindowUp,
   closeScreenBoard,
   closeScreenTeach,
   rememberBoardZoom,
   screenBoardContents,
   screenBoardFocused,
   screenTeachFocused,
+  setBoardOnTop,
+  showScreenBoard,
   toggleBoardPlace,
 } from "./screenTeach";
 import { checkForUpdates } from "./updater";
@@ -196,6 +200,10 @@ export function installMenu(): void {
           enabled: boardPlaceNow() !== null,
           click: () => toggleBoardPlace(),
         },
+        // (the board in its own window: brought forward, out of the Dock too, and floated over
+        // other apps or not, for later lessons as well)
+        { label: "Board", enabled: boardWindowUp(), click: () => showScreenBoard() },
+        { label: BOARD_COPY.onTop, type: "checkbox", checked: boardOnTopNow(), click: () => setBoardOnTop(!boardOnTopNow()) },
         ...windowExtras,
       ],
     },

@@ -198,8 +198,23 @@ const screenTeachBridge = Object.freeze({
   onCompanionWithdraw: (cb: unknown): (() => void) => listen("screen-teach:companion-withdraw", cb),
   /** The student scrolled another app's window ({window, dy, dx, lines}). */
   onWindowScroll: (cb: unknown): (() => void) => listen("screen-teach:window-scroll", cb),
-  /** The lesson's window settled into a new look ({run, window}): a page the student turned. */
+  /** The lesson's window settled into a new look ({run, window, explained?}): a page the student
+   *  turned. `explained`: a wheel just sent explains it (the window scrolled; its words moved). */
   onChanged: (cb: unknown): (() => void) => listen("screen-teach:changed", cb),
+  /** A watched window that was scrolled or changed has stopped moving ({window, run?}: `run` when
+   *  it is the lesson's): read it now, not on a guessed timer. From a helper that says it; a page
+   *  hearing none falls back to its own wait. */
+  onSettled: (cb: unknown): (() => void) => listen("screen-teach:settled", cb),
+  /** A zoom on a wheel (Command held) over a watched window ({window, run?}): never a scroll, so
+   *  what was read there is no longer where it was until it is read again. */
+  onZoom: (cb: unknown): (() => void) => listen("screen-teach:zoom", cb),
+  /** The content's true move measured from its pixels ({window, run?, dy, dx, settled}). Windows'
+   *  helper alone sends it; on this Mac it never comes, and the page follows the wheel. */
+  onShift: (cb: unknown): (() => void) => listen("screen-teach:shift", cb),
+  /** A scroll of the lesson's window the Mac app did not pass on ({window, run?}: the lesson aside,
+   *  its own scroll running, the cursor over the board or this window): read again before showing
+   *  any marks. */
+  onScrollMissed: (cb: unknown): (() => void) => listen("screen-teach:scroll-missed", cb),
   /** A key went down in the lesson's app, in front ({run}; never which key): the first of a run
    *  of keys, then one at most every 0.3 s while they keep coming, before any new look they bring
    *  is still. */
@@ -284,7 +299,8 @@ const screenTeachBridge = Object.freeze({
   wantKeys: (on: unknown): void => ipcRenderer.send("screen-teach:want-keys", on === true),
   /** Where the page gets the cursor: its own mouse moves ("page"), or the Mac app's feed ("main"). */
   cursorFeed: (from: unknown): void => ipcRenderer.send("screen-teach:cursor-feed", from === "main" ? "main" : "page"),
-  /** Circle to explain: the mouse up after a drag, the companion on (with its stroke). */
+  /** Circle to explain: the mouse up after a drag, the companion on (with its stroke). `ring`
+   *  false: a selection drag rather than a ring, with where it was pressed (`fx`, `fy`). */
   onLift: (cb: unknown): (() => void) => listen("screen-teach:lift", cb),
   /** A careful read of a circled window (null: none to be had). */
   circleRead: (req: unknown): Promise<unknown> => ipcRenderer.invoke("screen-teach:circle-read", req),
