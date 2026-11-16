@@ -40,7 +40,7 @@ import {
   type Reading,
 } from "./boardHost";
 import { boardStateOf, BOARD_MIN, opaqueColor, placeBoard, textBox } from "./boardPlace";
-import { isBrowserApp, isPrivateApp, isReaderApp, selectionKept, tapNumbers } from "./companionPlace";
+import { isBrowserApp, isPrivateApp, isReaderApp, selectionKept, tapActed, tapNumbers } from "./companionPlace";
 import { APP_ORIGIN, originOf } from "./config";
 import {
   anotherWindow,
@@ -191,6 +191,9 @@ interface ScreenStart {
    *  stands on its first words until Play, as a switched run that does not play (the page
    *  decides: it knows the run before). A page older than it hears a pick, and plays. */
   rehomed?: true;
+  /** Started by dropping the blob onto this window (companion.ts dropOn): an Explain at the drop
+   *  point (`click`). */
+  drop?: true;
 }
 
 /** How a lesson was asked for: by the companion's card (companion.ts), or by a pick; or by the
@@ -204,6 +207,8 @@ export interface ScreenTeachOptions {
   switched?: boolean;
   /** Started afresh where its window went (rehome): ScreenStart.rehomed. */
   rehomed?: boolean;
+  /** Started by dropping the blob on the window (companion.ts dropOn): ScreenStart.drop. */
+  drop?: boolean;
   /** Asked once the run's wait for the Accessibility answer is over, just before it starts: false
    *  and it never starts (the switch that asked for it was a flick after all, or the student went
    *  on to another app meanwhile). */
@@ -416,6 +421,24 @@ let win: BrowserWindow | null = null;
 /** The page in the window has asked for its start since it last loaded. */
 let pageReady = false;
 let readyTimer: NodeJS.Timeout | undefined;
+/*
+  The companion's page, brought back when it broke (reviveCompanionPage): one that has not said it
+  is ready COMPANION_READY_MS after the tutor went on with it (the page's own code comes as a lazy
+  chunk after the document has loaded, which on a slow network or a cold cache after a deploy can
+  take many seconds: never judged by isLoading()), one whose renderer stopped or failed to load at
+  once (did-fail-load, render-process-gone), one that said it failed (its
+  error boundary: screen-teach:page-failed), or one whose dock went and never came back
+  (companion.ts). The first time it is loaded again; after that its window is made anew; past
+  REVIVES_PER_MINUTE the tutor goes off (the next turn on makes a new window). The founder,
+  2026-11-15: "It gets really stuck": a page that never came up left the blob as a ring saying
+  "Click to stop", and turning the tutor on again reused the same dead window.
+*/
+const COMPANION_READY_MS = READY_TIMEOUT_MS;
+const REVIVES_PER_MINUTE = 3;
+let revives: number[] = [];
+let companionReadyTimer: NodeJS.Timeout | undefined;
+/** Where the tutor last hopped out from (screen points: showCompanionOverlay), for a window made anew. */
+let companionFrom: Point | null = null;
 let runs = 0;
 let lesson: Lesson | null = null;
 /** What the page is to run: sent with each pick, and given again whenever it asks (a reload). */
@@ -1544,6 +1567,11 @@ function destroyBoard(): void {
 }
 
 function ensureWindow(bounds: Rectangle): BrowserWindow {
+  // (a window whose page stopped is no use to anyone: a new one in its place)
+  if (live()?.webContents.isCrashed()) {
+    console.warn("[screen-teach] the lesson page had stopped: a new window");
+    discardWindow();
+  }
   const kept = live();
   if (kept) {
     const b = kept.getBounds();
@@ -1652,12 +1680,19 @@ function ensureWindow(bounds: Rectangle): BrowserWindow {
     // -3 is a load stopped by another (a reload): not a failure.
     if (!isMainFrame || code === -3 || win !== created) return;
     console.warn(`[screen-teach] the lesson page did not load: ${code} ${description}`);
+    // (the companion on: its page is brought back, a few times a minute at most)
+    if (companion?.on) return reviveCompanionPage(`did not load (${code})`);
     failLesson("The lesson couldn't open. Please try again.");
     dropWindow();
   });
   contents.on("render-process-gone", (_event, details) => {
     if (win !== created) return;
     console.warn(`[screen-teach] the lesson page stopped: ${details.reason}`);
+    // (the companion on: the lesson ends, and the tutor's page is made anew, the tutor still on)
+    if (companion?.on) {
+      closeScreenTeach();
+      return reviveCompanionPage(`stopped (${details.reason})`);
+    }
     failLesson("The lesson stopped. Press ⌃⌥E to start again.");
     dropWindow();
   });
@@ -1676,6 +1711,60 @@ function ensureWindow(bounds: Rectangle): BrowserWindow {
   void created.loadURL(`${APP_ORIGIN}${ROUTE}`);
   win = created;
   return created;
+}
+
+/** Let the window go with no word to companion.ts (no screen-teach-gone): a new one is made in its
+ *  place at once (reviveCompanionPage, ensureWindow). */
+function discardWindow(): void {
+  const w = live();
+  win = null;
+  pageReady = false;
+  setCardBox(null);
+  destroyBoard();
+  w?.destroy();
+}
+
+/** The companion's page is to say it is ready within COMPANION_READY_MS of the tutor going on
+ *  with it (or of its being brought back), else it is brought back. */
+function watchCompanionReady(): void {
+  clearTimeout(companionReadyTimer);
+  if (pageReady || !companion?.on) return;
+  companionReadyTimer = setTimeout(() => {
+    if (!companion?.on || pageReady) return;
+    reviveCompanionPage("never said it was ready");
+  }, COMPANION_READY_MS);
+}
+
+/**
+ * The companion's page broke (`why`, for the log): loaded again the first time in a minute, its
+ * window made anew after that, and past REVIVES_PER_MINUTE given up (the tutor goes off, as for a
+ * window gone: screen-teach-gone). Nothing with the companion off.
+ */
+export function reviveCompanionPage(why: string): void {
+  if (!companion?.on) return;
+  clearTimeout(companionReadyTimer);
+  const now = Date.now();
+  revives = revives.filter((at) => now - at < 60_000);
+  if (revives.length >= REVIVES_PER_MINUTE) {
+    console.warn(`[companion] the tutor's page ${why}, again: the tutor is off`);
+    failLesson("The tutor couldn't start. Please try again.");
+    dropWindow();
+    return;
+  }
+  revives.push(now);
+  const w = live();
+  if (w && revives.length === 1 && !w.webContents.isCrashed()) {
+    console.warn(`[companion] the tutor's page ${why}: loading it again`);
+    pageReady = false;
+    w.webContents.reload();
+    watchCompanionReady();
+    return;
+  }
+  console.warn(`[companion] the tutor's page ${why}: a new window`);
+  const work = companion.work;
+  const from = companionFrom ?? { x: work.x + work.width / 2, y: work.y + work.height / 2 };
+  discardWindow();
+  showCompanionOverlay(work, from, false);
 }
 
 /** Give up on the window, its page having failed: the next pick makes a new one. */
@@ -1860,6 +1949,7 @@ export async function openScreenTeach(read: ScreenRead, click: Point, opts?: Scr
     ...(opts?.switched ? { switched: true } : {}),
     // (the same document, where its window went: rehome)
     ...(opts?.rehomed ? { rehomed: true } : {}),
+    ...(opts?.drop ? { drop: true } : {}),
   };
   console.log(
     `[screen-teach] run ${run}: ${read.app} (${read.bundle || "no bundle id"}), ${mode}, turning ${canTurn ? "allowed" : "not allowed"}` +
@@ -2167,7 +2257,9 @@ function onTap(tap: ScreenTap): void {
   // lesson tap there, which the page takes as one that did nothing in the app. A card the page
   // opened at the release goes at once (companion-withdraw).
   const kept = selectionKept({ words: tap.words, bundle: current.bundle, title: current.title });
-  if (!kept && ((tap.acted && !tap.alt) || tap.words === "select")) {
+  // (and a caret a click put in a browser's page or a reader's: companionPlace.ts tapActed)
+  const acted = tapActed({ acted: tap.acted, words: tap.words, bundle: current.bundle, title: current.title });
+  if (!kept && ((acted && !tap.alt) || tap.words === "select")) {
     console.log(`[screen-teach] tap acted in ${current.app}: left to the app${tapNumbers(tap)}`);
     if (companion?.on && tap.id !== undefined) {
       w.webContents.send("screen-teach:companion-withdraw", { id: tap.id, why: tap.words ?? "acted", window: tap.window });
@@ -2180,14 +2272,14 @@ function onTap(tap: ScreenTap): void {
     }
     return;
   }
-  if (kept) console.log(`[screen-teach] tap in ${current.app}: a lesson tap${tapNumbers(tap)} (selection in a reader: kept)`);
+  if (tap.acted && !acted) console.log(`[screen-teach] tap in ${current.app}: a lesson tap${tapNumbers(tap)} (the student's ${kept ? "selection" : "caret"}: kept)`);
   const b = w.getBounds();
   w.webContents.send("screen-teach:tap", {
     run: current.run,
     x: tap.x - b.x,
     y: tap.y - b.y,
     moved: tap.moved,
-    acted: kept ? false : tap.acted,
+    acted,
     alt: tap.alt,
     ...(tap.id !== undefined ? { id: tap.id } : {}),
   });
@@ -3160,6 +3252,9 @@ export function showCompanionOverlay(work: Rectangle, from: Point, first: boolea
   }
   // The talk chord and ⌃⌥M: the companion dock's mic, with no lesson on too.
   registerTalkKey();
+  // (a page that never says it is ready is brought back: reviveCompanionPage)
+  companionFrom = { ...from };
+  watchCompanionReady();
 }
 
 /** The cursor went to another display (no lesson on): the window follows it. Every point the page
@@ -3176,6 +3271,7 @@ export function moveCompanionOverlay(work: Rectangle): void {
  *  takes keys again for a lesson started without it. */
 export function hideCompanionOverlay(): void {
   companion = null;
+  clearTimeout(companionReadyTimer);
   setCardBox(null);
   // (a lesson on screen keeps ⌃⌥M and the chord; they go with the lesson then)
   if (!lesson) unregisterTalkKey();
@@ -3392,6 +3488,7 @@ export function installScreenTeach(): void {
     if (!fromLesson(event)) throw new Error("not allowed");
     pageReady = true;
     clearTimeout(readyTimer);
+    clearTimeout(companionReadyTimer);
     const w = live();
     // (a page loaded afresh while the student is in another app: away, not with the lesson)
     if (lesson && aside) w?.webContents.send("screen-teach:present", false);
@@ -3604,6 +3701,22 @@ export function installScreenTeach(): void {
     }
     getMainWindow()?.show();
     navigateTo(`${url.pathname}${url.search}${url.hash}`);
+  });
+
+  // The page's own error boundary caught a failure of its own (screen-teach:page-failed, a short
+  // reason for the log): with the companion on it is brought back; a lesson alone ends, and the
+  // next pick makes a new window.
+  ipcMain.on("screen-teach:page-failed", (event, why: unknown) => {
+    if (!fromLesson(event)) return;
+    const said = typeof why === "string" ? why.replace(/[\r\n]+/g, " ").slice(0, 80) : "";
+    console.warn(`[screen-teach] the page said it failed${said ? `: ${said}` : ""}`);
+    if (companion?.on) {
+      closeScreenTeach();
+      reviveCompanionPage("said it failed");
+    } else if (lesson) {
+      failLesson("The lesson stopped. Please try again.");
+      dropWindow();
+    }
   });
 
   // Only the lesson on screen: a close sent as the page heard "close" must not drop the
