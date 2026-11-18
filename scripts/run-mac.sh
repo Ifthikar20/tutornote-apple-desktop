@@ -46,22 +46,10 @@ if [ ! -d node_modules ] || ! node -e "require('electron')" >/dev/null 2>&1; the
 fi
 
 # 3. codesign refuses files carrying Finder or iCloud metadata, and iCloud Drive stamps
-#    everything under a synced folder (Desktop, Documents). Keep the build output elsewhere.
-in_icloud() {
-  local d="$1"
-  while [ "$d" != "/" ]; do
-    xattr -l "$d" 2>/dev/null | grep -q 'com.apple.file-provider' && return 0
-    d="$(dirname "$d")"
-  done
-  return 1
-}
-if [ "$MODE" != dev ] && [ ! -L release ] && in_icloud "$ROOT"; then
-  OUT="$HOME/Library/Caches/anothernotes-release"
-  say "project is in an iCloud-synced folder; building into $OUT (release -> symlink)"
-  rm -rf release
-  mkdir -p "$OUT"
-  ln -s "$OUT" release
-fi
+#    everything under a synced folder (Desktop, Documents). The build goes to
+#    ~/Library/Caches/tutornote-build/release (or TUTORNOTE_RELEASE_DIR): electron-builder.config.cjs.
+REL="$(node -p "require('./electron-builder.config.cjs').directories.output")"
+case "$REL" in /*) ;; *) REL="$ROOT/$REL" ;; esac
 
 # 4. The app allows one running copy; a second launch would quit silently. (It was
 #    AnotherNote before the rename, and AnotherNotes until 0.1.0; a copy from then may still be running.)
@@ -100,17 +88,17 @@ case "$MODE" in
     exec node_modules/.bin/electron .
     ;;
   pack)
-    say "building release/<arch>/Tutornote.app"
+    say "building $REL/<arch>/Tutornote.app"
     npm run pack
     ARCH_DIR="mac-$(uname -m | sed 's/x86_64/x64/')"
-    [ -d "release/$ARCH_DIR" ] || ARCH_DIR=mac
-    APP="release/$ARCH_DIR/Tutornote.app"
+    [ -d "$REL/$ARCH_DIR" ] || ARCH_DIR=mac
+    APP="$REL/$ARCH_DIR/Tutornote.app"
     ;;
   dist)
     say "building the universal .app and .dmg"
     npm run dist:mac
-    APP="release/mac-universal/Tutornote.app"
-    ls -1 release/*.dmg
+    APP="$REL/mac-universal/Tutornote.app"
+    ls -1 "$REL"/*.dmg
     ;;
 esac
 say "starting $APP"

@@ -310,7 +310,7 @@ export interface ScreenZoom {
 }
 
 /** The watched window's content moved by `dy`, `dx` points between two frames, measured from its
- *  pixels while it moves (Windows' helper only; the Mac's never sends it); `settled` with the last
+ *  pixels while it moves (helpers/screen main.swift ShiftTracker, as Windows' Shift.cs); `settled` with the last
  *  (screenWatch.ts shiftOf). */
 export interface ScreenShift {
   window: number;
@@ -411,7 +411,7 @@ export interface ScreenChordState {
  * "changed" (a ScreenChanged) for the windows observed, and "keyed" (a ScreenKeyed) for the
  * watched one while it is observed; "settled" (a ScreenSettled) once an observed window that moved
  * is still, "zoom" (a ScreenZoom) for a zoom on a wheel, never sent as a scroll, and "shift" (a
- * ScreenShift; Windows' helper alone). While the talk chord is watched
+ * ScreenShift: the content's measured move while an observed window moves). While the talk chord is watched
  * (chordWatch), "chord" (a ScreenChord) and "chordState" (a ScreenChordState).
  */
 export const watchEvents = new EventEmitter();
@@ -561,7 +561,7 @@ function onLine(line: string): void {
     return;
   }
   if (msg.ev === "shift") {
-    // (Windows' helper alone measures it; kept here so one page script serves both)
+    // (measured from the window's pixels: main.swift ShiftTracker; a helper older than it never says it)
     const shift = shiftOf(msg);
     if (shift) watchEvents.emit("shift", shift satisfies ScreenShift);
     return;

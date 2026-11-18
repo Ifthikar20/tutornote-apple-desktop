@@ -14,7 +14,7 @@
       onPointerDown);
     - the two stylesheets it needs (components/guide/tutorCharacters.css and
       components/auth/logoHang.css), between the CSS comments of the same names.
-  scripts/build-renderer.sh runs it after each bundle, from the same web checkout.
+  scripts/build-renderer.mjs runs it after each bundle, from the same web commit.
 
     node scripts/sign-in-tutor.mjs [web checkout]   (default: $ANOTHERNOTES_WEB_DIR, ../tutornote-web)
 

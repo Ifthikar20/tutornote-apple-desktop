@@ -2,7 +2,7 @@ import { app, ipcMain, session, systemPreferences, type IpcMainInvokeEvent } fro
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { offendingSwitch } from "./argGuard";
-import { beginBrowserSignIn, cancelBrowserSignIn, deepLinksIn, handleDeepLink, registerProtocol } from "./auth";
+import { authLog, beginBrowserSignIn, cancelBrowserSignIn, deepLinksIn, handleDeepLink, registerProtocol } from "./auth";
 import {
   API_ORIGIN,
   API_URL,
@@ -73,6 +73,8 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
+    // (the step that shows whether macOS handed a sign-in link to this copy: the sign-in log)
+    if (deepLinksIn(argv).length) authLog(`a second launch brought ${deepLinksIn(argv).length} link(s)${launched ? "" : " before the window was up"}`);
     // (before the first window is made, as the Dock's activate: focusMainWindow would make one,
     // and the launch's own a second; its links wait with the cold start's, handled once it is)
     if (!launched) {
@@ -83,7 +85,7 @@ if (!app.requestSingleInstanceLock()) {
     for (const link of deepLinksIn(argv)) handleDeepLink(link);
   });
 
-  // macOS delivers anothernotes:// links here, possibly before the app is ready.
+  // macOS delivers tutornote:// (and old anothernotes://) links here, possibly before the app is ready.
   app.on("open-url", (event, url) => {
     event.preventDefault();
     if (getMainWindow()) handleDeepLink(url);
@@ -131,14 +133,13 @@ if (!app.requestSingleInstanceLock()) {
     });
     registerProtocol();
     setBrowserSignIn(beginBrowserSignIn);
-    // The exchange's outcome, on the console: the last step a browser sign-in can fail at inside
-    // the app (renderer.ts). (The Mac has no sign-in log file yet; Windows writes this line there.)
+    // The exchange's outcome, in the sign-in log: the last step a browser sign-in can fail at
+    // inside the app (renderer.ts).
     appEvents.on("sign-in-exchange", (e: { status: number; refused: string | null; kept: boolean }) => {
-      console.log(
-        `[anothernotes] sign-in: ` +
-          (e.refused
-            ? `the server refused the code (${e.refused}, ${e.status})`
-            : `the server took the code (${e.status}); session ${e.kept ? "kept in the app" : "NOT kept: the app stays signed out"}`),
+      authLog(
+        e.refused
+          ? `the server refused the code (${e.refused}, ${e.status})`
+          : `the server took the code (${e.status}); session ${e.kept ? "kept in the app" : "NOT kept: the app stays signed out"}`,
       );
     });
 

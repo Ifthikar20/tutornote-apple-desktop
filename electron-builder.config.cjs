@@ -3,6 +3,11 @@
   (drag-to-Applications installer), a .zip of the same app for the updater, and latest-mac.yml,
   the update feed. See the README (Tutornote_test_suite, docs/apple-desktop/README.md) for signing
   and notarising.
+
+  The output goes outside iCloud (~/Library/Caches/tutornote-build/release, or
+  TUTORNOTE_RELEASE_DIR): codesign refuses files carrying iCloud or Finder metadata, and iCloud
+  Drive stamps everything under a synced folder (Desktop, Documents). CI, and a build off a Mac,
+  keep release/ (the workflow uploads release/*.dmg).
 */
 
 // Notarise only when Apple credentials are in the environment (CI secrets); otherwise
@@ -17,6 +22,12 @@ const hasSpeechHelper = require("node:fs").existsSync(speechHelper);
 // window for "Explain on screen" (src/main/screen.ts). Packaged the same way when built.
 const screenHelper = require("node:path").join(__dirname, "build", "helpers", "tutornote-screen");
 const hasScreenHelper = require("node:fs").existsSync(screenHelper);
+// Where the build goes (above).
+const releaseDir =
+  process.env.TUTORNOTE_RELEASE_DIR ||
+  (process.env.CI || process.platform !== "darwin"
+    ? "release"
+    : require("node:path").join(require("node:os").homedir(), "Library", "Caches", "tutornote-build", "release"));
 const helpers = [
   ...(hasSpeechHelper ? [{ from: speechHelper, to: "tutornote-speech" }] : []),
   ...(hasScreenHelper ? [{ from: screenHelper, to: "tutornote-screen" }] : []),
@@ -32,7 +43,7 @@ module.exports = {
   productName: "Tutornote",
   copyright: "Copyright © 2026 Tutornote",
   directories: {
-    output: "release",
+    output: releaseDir,
     buildResources: "build",
   },
   files: ["dist/**/*", "static/**/*", "renderer/**/*", "package.json"],
@@ -57,8 +68,10 @@ module.exports = {
     onlyLoadAppFromAsar: true,
     grantFileProtocolExtraPrivileges: true,
   },
-  // The link that brings a browser sign-in back into the app (src/main/auth.ts).
-  protocols: { name: "Tutornote", schemes: ["anothernotes"] },
+  // The links that bring a browser sign-in back into the app (src/main/auth.ts): tutornote://, and
+  // the old anothernotes:// until the web's sign-in page names the scheme everywhere. Both go
+  // into Info.plist's CFBundleURLSchemes.
+  protocols: { name: "Tutornote", schemes: ["tutornote", "anothernotes"] },
   // The GitHub Releases feed electron-updater reads (latest-mac.yml beside the .dmg and .zip).
   // This must be the repository the release workflow publishes to - this repo
   // (Ifthikar20/tutornote-apple-desktop), not the old name, or installed apps check a feed that

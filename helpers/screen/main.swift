@@ -222,6 +222,18 @@
                                                    zoom, never said as a scroll (notches in the
                                                    wheel's lines' sense). A trackpad's pinch is
                                                    no wheel, and is left as it was
+         {"ev":"shift","window":12345,"dy":12.25,"dx":0,"settled":false}
+                                                   an observed window's content really moved,
+                                                   measured from its pixels while it moves
+                                                   (ShiftTracker: from the first wheel or key on
+                                                   it, or a new look no input began, until it is
+                                                   still): up by dy points and left by dx since
+                                                   the shift before. "settled": the motion's last,
+                                                   said just before its "settled". With "lost":
+                                                   true (dy and dx 0, "why": reference, frame,
+                                                   capture, end, flat, split, changed, size) the
+                                                   match was refused: this motion's shifts stop
+                                                   here, and nothing is guessed
          {"ev":"keyed","window":12345}             a key went down in the watched window's app,
                                                    in front, that window observed (the first of
                                                    a run of keys, then one at most every
@@ -278,8 +290,13 @@
                                                    "secure"), or once the modifier keys look
                                                    hidden from this helper ("hidden")
          {"id":1,"ev":"error","code":"…"}          no_permission, no_window, window_gone,
-                                                   no_access, capture_failed, bad_command,
-                                                   cancelled; for a crop also off (the
+                                                   no_access, capture_failed (also a read whose
+                                                   words were not read within READ_MS),
+                                                   bad_command (also a command it does not
+                                                   know, when it has an id), cancelled; for a
+                                                   read at a point also private (the window
+                                                   there is a private app's or Tutornote's, or
+                                                   secure input is on); for a crop also off (the
                                                    companion is), private (a private app's or
                                                    Tutornote's window, or secure input on),
                                                    bad_rect (under CROP_MIN a side inside the
@@ -288,8 +305,9 @@
   `tutornote-screen --selftest` checks the picture arithmetic, the words rule, and a page's paper,
   rules and ink on pictures it draws itself (no screen needed), a line's guessed words on made up
   boxes, a wheel's step and the keys that burst a window on made up numbers, the talk chord's
-  steps on made up presses, and a drag's stroke and a crop's rectangle and JPEG on made up
-  points, and exits 0 or 1. `tutornote-screen --chordtest` (in Terminal, for a person at the keyboard) prints what the
+  steps on made up presses, a drag's stroke and a crop's rectangle and JPEG on made up
+  points, a page's measured shift on pages it draws (shiftSelfTest), and a stuck read given up,
+  and exits 0 or 1. `tutornote-screen --chordtest` (in Terminal, for a person at the keyboard) prints what the
   chord's polls see for 20 s; it needs no app, shows no window and asks for nothing.
 
   Needs macOS 14 (ScreenCaptureKit's one-picture capture). The app shows no button when the
@@ -363,6 +381,13 @@ func refuseUnlessLaunchedByTutornote() {
         tutornoteAppPid = app
         return
     }
+    // (a development copy, ad-hoc signed by scripts/build-screen-helper.sh, never the team-signed
+    // one: --any-parent runs it from any process, a terminal included, to repeat live measurements
+    // by hand. As the Windows helper's --any-parent)
+    if ownTeam() == nil && CommandLine.arguments.contains("--any-parent") {
+        log("[screen] a development copy, started with --any-parent by process \(app)")
+        return
+    }
     log("[screen] not started by the Tutornote app (process \(app)): refusing to read the screen")
     exit(1)
 }
@@ -396,7 +421,8 @@ func runDisclaimedIfNeeded() {
     let path = String(cString: buffer)
     var env = ProcessInfo.processInfo.environment
     env[DISCLAIMED_ENV] = "1"
-    let argv: [UnsafeMutablePointer<CChar>?] = [strdup(path), nil]
+    // (its own arguments passed on: --any-parent)
+    let argv: [UnsafeMutablePointer<CChar>?] = ([path] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]
     let envp: [UnsafeMutablePointer<CChar>?] = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
     var pid: pid_t = 0
     let rc = posix_spawn(&pid, path, nil, &attr, argv, envp)
@@ -687,15 +713,78 @@ enum Level: String {
     case accurate
 }
 
-/// The words in `image` at `level`: Vision's lines, front to back.
-func recognize(_ image: CGImage, _ level: Level) throws -> [VNRecognizedTextObservation] {
+/// Vision's request for the words at `level`.
+func textRequest(_ level: Level) -> VNRecognizeTextRequest {
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = level == .fast ? .fast : .accurate
     request.usesLanguageCorrection = level == .accurate
     // (only the accurate pass detects the language; the fast one reads Latin script)
     request.automaticallyDetectsLanguage = level == .accurate
+    return request
+}
+
+/// The words in `image` at `level`: Vision's lines, front to back.
+func recognize(_ image: CGImage, _ level: Level) throws -> [VNRecognizedTextObservation] {
+    let request = textRequest(level)
     try VNImageRequestHandler(cgImage: image).perform([request])
     return request.results ?? []
+}
+
+/*
+  A read never waits for ever (as the Windows helper's Ocr.cs READ_MS): a whole window's words take
+  well under a second as a rule, and a pass that has not finished in READ_MS is given up (its
+  request cancelled), so the read answers capture_failed, inside the app's own 30 s wait, rather
+  than never. Vision has no single shared engine to retire: the next read makes its own request.
+*/
+let READ_MS = 8000
+
+/// A pass given up as stuck (READ_MS).
+struct RecognizeStuck: Error {}
+
+/// Selftest only: the next pass waits this many ms before it starts, as a stuck one would. 0: off.
+final class RecognizeStall: @unchecked Sendable {
+    private let lock = NSLock()
+    private var nextMs = 0
+
+    func set(_ ms: Int) {
+        lock.lock()
+        nextMs = ms
+        lock.unlock()
+    }
+
+    func take() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let ms = nextMs
+        nextMs = 0
+        return ms
+    }
+}
+let recognizeStall = RecognizeStall()
+
+/// recognize, given up after `ms` (RecognizeStuck): the pass runs on a queue of its own, and
+/// whichever comes first, its answer or the deadline, is the answer (FirstOnly).
+func recognizeWithin(_ image: CGImage, _ level: Level, ms: Int = READ_MS) async throws -> [VNRecognizedTextObservation] {
+    let request = textRequest(level)
+    let stall = recognizeStall.take()
+    return try await withCheckedThrowingContinuation { (answer: CheckedContinuation<[VNRecognizedTextObservation], Error>) in
+        let first = FirstOnly()
+        DispatchQueue.global(qos: .userInitiated).async {
+            if stall > 0 { usleep(UInt32(stall * 1000)) }
+            do {
+                try VNImageRequestHandler(cgImage: image).perform([request])
+                if first.take() { answer.resume(returning: request.results ?? []) }
+            } catch {
+                if first.take() { answer.resume(throwing: error) }
+            }
+        }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(ms)) {
+            guard first.take() else { return }
+            request.cancel()
+            log("[screen] text recognition stuck past \(ms) ms: given up")
+            answer.resume(throwing: RecognizeStuck())
+        }
+    }
 }
 
 /// The picture a read is made from, and its thumbnail (`small`) taken alongside it rather than
@@ -726,6 +815,17 @@ func read(id: Int, which: Which, level: Level = .accurate) async {
     guard let target = found else {
         emit(["id": id, "ev": "error", "code": missing])
         return
+    }
+    // A read at a point never pictures a private app's window, nor Tutornote's own floating ones
+    // (the blob, the board), nor any while a password field has the keys: "private", as a crop's
+    // (the app says "Tutornote doesn't read that window"). A read by id is of a window the app
+    // was given already.
+    if case .at = which {
+        let refused = await MainActor.run { keptPrivate(target.pid) || isTutornoteKept(target.pid) || stopWindows.contains(target.id) }
+        if refused {
+            emit(["id": id, "ev": "error", "code": "private"])
+            return
+        }
     }
     let started = DispatchTime.now()
     let image: CGImage
@@ -769,10 +869,11 @@ func read(id: Int, which: Which, level: Level = .accurate) async {
     var used = level
     var observations: [VNRecognizedTextObservation]
     do {
-        observations = try recognize(image, level)
+        // (READ_MS at the most each: a stuck pass is given up, and the read answers capture_failed)
+        observations = try await recognizeWithin(image, level)
         // (no thumbnail to tell by: tried again too)
         if level == .fast && observations.isEmpty && !(seen.map(isBlank) ?? false) {
-            observations = try recognize(image, .accurate)
+            observations = try await recognizeWithin(image, .accurate)
             used = .accurate
         }
     } catch {
@@ -1335,6 +1436,357 @@ func lastSeen(_ window: CGWindowID) -> [UInt8]? {
     return seenWindows[window]
 }
 
+// MARK: - How far the content really moved ("shift")
+
+/*
+  A wheel says how far the app was asked to scroll, not how far it went: an app's own step, its
+  smooth-scroll animation and a page that stops at its end all differ from it, and the lesson's ink
+  drawn at a guess slides off the words it marks (the founder, 2026-11-14: "when I scroll up and
+  down it displaces and highlights different sections"). So, from the first wheel (or key) on an
+  observed window until it settles, at most every TRACK_FRAME_MS and never for more than
+  TRACK_IDLE_STOP_MS past the last input, the window's body (its frame without the top and bottom
+  EDGE_SHARE, where bars sit) is pictured, the window alone, at one pixel per point, in grey
+  (ShiftTracker, below). Each picture is matched against the one before (shiftMeasure): row
+  profiles of its ink in SHIFT_STRIPS vertical strips, each strip's best lag by normalised
+  cross-correlation, the lag most strips agree on (a static sidebar's strip votes 0 and is
+  outvoted), refined below a pixel by a parabola through the correlation, and checked on the
+  pixels themselves (shiftResidual) so a page that changed, rather than moved, is never taken for
+  a shift. A match that is not clearly right says nothing ("send nothing rather than a guess"),
+  and the motion's shifts stop with a "lost" one. A line-by-line port of the Windows helper's
+  Shift.cs (Shift.Measure), with its constants.
+
+  Sign: as the wheel's "scroll" dy, the content moved UP by dy points (it was at row y, it is at
+  y - dy now), and LEFT by dx.
+*/
+
+/// A grey picture, one byte a pixel, row by row from the top: `w` x `h`.
+struct Grey {
+    let w: Int
+    let h: Int
+    var g: [UInt8]
+}
+
+/// One match of two pictures: `ok` with `dy`, `dx` (pixels of the pictures), or `why` it was refused.
+struct ShiftMatch {
+    var ok = false
+    var dy = 0.0
+    var dx = 0.0
+    var votes = 0
+    var strips = 0
+    var residual = 0.0
+    var texture = 0.0
+    var why = ""
+}
+
+/// The body is cut into this many vertical strips, each matched on its own.
+let SHIFT_STRIPS = 8
+/// A strip's ink profile below this spread is blank: it has no vote.
+let SHIFT_FLAT_STD = 20.0
+/// A strip's best correlation below this is no match: it has no vote.
+let SHIFT_STRIP_NCC = 0.8
+/// Pixels this far from the page's ground are ink (a fainter edge is the screen's noise).
+let SHIFT_INK_FROM = 10
+/// The rows two pictures must share at the least: a quarter of their height, 16 at the least.
+let SHIFT_MIN_OVERLAP = 16
+/// The pixels at the agreed shift must differ by no more than this share of the page's own texture
+/// (its mean difference to itself one row down): a sub-pixel shift leaves about half of it, a page
+/// that changed leaves more than all of it.
+let SHIFT_RESIDUAL_SHARE = 0.75
+/// A page with less texture than this (grey levels) is too blank to match.
+let SHIFT_MIN_TEXTURE = 0.4
+
+/// The page's ground: its most common grey value (every third pixel counted).
+func shiftGround(_ look: Grey) -> Int {
+    var hist = [Int](repeating: 0, count: 256)
+    var i = 0
+    while i < look.g.count {
+        hist[Int(look.g[i])] += 1
+        i += 3
+    }
+    var best = 0
+    for v in 1..<256 where hist[v] > hist[best] { best = v }
+    return best
+}
+
+/// Each strip's row profile: per row, how much ink it has (distance from the ground).
+func shiftProfiles(_ look: Grey, ground: Int, strips: Int) -> [[Double]] {
+    var profiles: [[Double]] = []
+    profiles.reserveCapacity(strips)
+    look.g.withUnsafeBufferPointer { px in
+        for k in 0..<strips {
+            var profile = [Double](repeating: 0, count: look.h)
+            let x0 = k * look.w / strips
+            let x1 = (k + 1) * look.w / strips
+            for y in 0..<look.h {
+                let row = y * look.w
+                var sum = 0
+                for x in x0..<x1 {
+                    let d = abs(Int(px[row + x]) - ground)
+                    if d > SHIFT_INK_FROM { sum += d - SHIFT_INK_FROM }
+                }
+                profile[y] = Double(sum)
+            }
+            profiles.append(profile)
+        }
+    }
+    return profiles
+}
+
+/// The spread (standard deviation) of a profile.
+func shiftStd(_ a: [Double]) -> Double {
+    if a.isEmpty { return 0 }
+    let m = a.reduce(0, +) / Double(a.count)
+    var s = 0.0
+    for v in a { s += (v - m) * (v - m) }
+    return (s / Double(a.count)).squareRoot()
+}
+
+/// The normalised cross-correlation of `a` and `b` at `lag`: `a[i]` against `b[i - lag]` over the
+/// indices both have (b's content is a's moved by `lag` towards 0). -2 with fewer than `minOverlap`
+/// shared or with either side flat there.
+func shiftNcc(_ a: [Double], _ b: [Double], lag: Int, minOverlap: Int) -> Double {
+    let from = max(0, lag)
+    let to = min(a.count, b.count + lag)
+    let n = to - from
+    if n < max(1, minOverlap) { return -2 }
+    return a.withUnsafeBufferPointer { pa in
+        b.withUnsafeBufferPointer { pb in
+            var sa = 0.0
+            var sb = 0.0
+            for i in from..<to {
+                sa += pa[i]
+                sb += pb[i - lag]
+            }
+            let ma = sa / Double(n)
+            let mb = sb / Double(n)
+            var sab = 0.0
+            var saa = 0.0
+            var sbb = 0.0
+            for i in from..<to {
+                let x = pa[i] - ma
+                let y = pb[i - lag] - mb
+                sab += x * y
+                saa += x * x
+                sbb += y * y
+            }
+            if saa <= 1e-9 || sbb <= 1e-9 { return -2 }
+            return sab / (saa * sbb).squareRoot()
+        }
+    }
+}
+
+/// The same over several profiles at once (each pair a[k], b[k], summed).
+func shiftNccAll(_ a: [[Double]], _ b: [[Double]], _ which: [Int], lag: Int, minOverlap: Int) -> Double {
+    var sab = 0.0
+    var saa = 0.0
+    var sbb = 0.0
+    for k in which {
+        let pa = a[k]
+        let pb = b[k]
+        let from = max(0, lag)
+        let to = min(pa.count, pb.count + lag)
+        let n = to - from
+        if n < max(1, minOverlap) { return -2 }
+        var ma = 0.0
+        var mb = 0.0
+        for i in from..<to {
+            ma += pa[i]
+            mb += pb[i - lag]
+        }
+        ma /= Double(n)
+        mb /= Double(n)
+        for i in from..<to {
+            let x = pa[i] - ma
+            let y = pb[i - lag] - mb
+            sab += x * y
+            saa += x * x
+            sbb += y * y
+        }
+    }
+    if saa <= 1e-9 || sbb <= 1e-9 { return -2 }
+    return sab / (saa * sbb).squareRoot()
+}
+
+/// The best whole lag of `a` against `b` within +-`maxLag`, and its correlation.
+func shiftBestLag(_ a: [Double], _ b: [Double], maxLag: Int, minOverlap: Int) -> (lag: Int, score: Double) {
+    var score = -2.0
+    var best = 0
+    if maxLag < 0 { return (0, score) }
+    for lag in -maxLag...maxLag {
+        let c = shiftNcc(a, b, lag: lag, minOverlap: minOverlap)
+        // (a tie goes to the smaller move)
+        if c > score + 1e-9 || (abs(c - score) <= 1e-9 && abs(lag) < abs(best)) {
+            score = c
+            best = lag
+        }
+    }
+    return (best, score)
+}
+
+/// Where a parabola through three correlations at -1, 0, +1 peaks, within half a step of 0.
+func shiftParabola(_ left: Double, _ mid: Double, _ right: Double) -> Double {
+    if left < -1.5 || right < -1.5 { return 0 }
+    let den = left - 2 * mid + right
+    if den >= -1e-12 { return 0 }
+    let d = 0.5 * (left - right) / den
+    return max(-0.5, min(0.5, d))
+}
+
+/// The mean grey difference of `a` against `b` moved by `dy` rows and `dx` columns (b's pixel at
+/// (x - dx, y - dy) against a's at (x, y)), in columns x0..<x1 of a, every other row and column.
+/// 255 when they share too little.
+func shiftResidual(_ a: Grey, _ b: Grey, dy: Int, dx: Int, x0: Int, x1: Int) -> Double {
+    let y0 = max(0, dy)
+    let y1 = min(a.h, b.h + dy)
+    let xa = max(max(0, dx), x0)
+    let xb = min(min(a.w, b.w + dx), x1)
+    var sum = 0
+    var n = 0
+    a.g.withUnsafeBufferPointer { pa in
+        b.g.withUnsafeBufferPointer { pb in
+            for y in stride(from: y0, to: y1, by: 2) {
+                let ra = y * a.w
+                let rb = (y - dy) * b.w - dx
+                for x in stride(from: xa, to: xb, by: 2) {
+                    sum += abs(Int(pa[ra + x]) - Int(pb[rb + x]))
+                    n += 1
+                }
+            }
+        }
+    }
+    return n < 64 ? 255 : Double(sum) / Double(n)
+}
+
+/// The lag most of `lags` lie within a row of (`best`; a tie goes to the smaller move), and how many.
+func shiftVote(_ lags: [Int]) -> (votes: Int, best: Int) {
+    var best = 0
+    var most = 0
+    for c in lags {
+        let votes = lags.filter { abs($0 - c) <= 1 }.count
+        if votes > most || (votes == most && abs(c) < abs(best)) {
+            most = votes
+            best = c
+        }
+    }
+    return (most, best)
+}
+
+/// The columns' ink profile over the rows `prev` (`isPrev`) or `cur` shares with the other at lag
+/// `lag` (a's rows lag.., b's rows ..h-lag).
+func shiftColumns(_ look: Grey, ground: Int, lag: Int, isPrev: Bool) -> [Double] {
+    let y0 = isPrev ? max(0, lag) : max(0, -lag)
+    let y1 = isPrev ? min(look.h, look.h + lag) : min(look.h, look.h - lag)
+    var c = [Double](repeating: 0, count: look.w)
+    look.g.withUnsafeBufferPointer { px in
+        for y in stride(from: y0, to: y1, by: 1) {
+            let row = y * look.w
+            for x in 0..<look.w {
+                let d = abs(Int(px[row + x]) - ground)
+                if d > SHIFT_INK_FROM { c[x] += Double(d - SHIFT_INK_FROM) }
+            }
+        }
+    }
+    return c
+}
+
+/// How `cur` moved from `prev` (pictures of the same size): `dy` rows up and `dx` columns left, in
+/// the pictures' pixels, or refused (`ok` false, `why`): "size", "flat" (too little to match),
+/// "split" (the strips do not agree), "changed" (the pixels do not match at the agreed shift).
+func shiftMeasure(_ prev: Grey, _ cur: Grey) -> ShiftMatch {
+    var m = ShiftMatch()
+    guard prev.w == cur.w, prev.h == cur.h, prev.w >= SHIFT_STRIPS * 4, prev.h >= SHIFT_MIN_OVERLAP * 2,
+          prev.g.count == prev.w * prev.h, cur.g.count == cur.w * cur.h
+    else {
+        m.why = "size"
+        return m
+    }
+    let width = prev.w
+    let height = prev.h
+    let ground = shiftGround(prev)
+    let a = shiftProfiles(prev, ground: ground, strips: SHIFT_STRIPS)
+    let b = shiftProfiles(cur, ground: ground, strips: SHIFT_STRIPS)
+    let minOverlap = max(SHIFT_MIN_OVERLAP, height / 4)
+    let maxLag = height - minOverlap
+    // Each textured strip's own best lag.
+    var lags: [Int] = []
+    var voters: [Int] = []
+    for k in 0..<SHIFT_STRIPS {
+        if shiftStd(a[k]) < SHIFT_FLAT_STD || shiftStd(b[k]) < SHIFT_FLAT_STD { continue }
+        let found = shiftBestLag(a[k], b[k], maxLag: maxLag, minOverlap: minOverlap)
+        if found.score < SHIFT_STRIP_NCC { continue }
+        lags.append(found.lag)
+        voters.append(k)
+    }
+    m.strips = voters.count
+    if voters.count < 2 {
+        m.why = "flat"
+        return m
+    }
+    // The lag most strips agree on (within a row of each other), and no other lag as many.
+    let (bestVotes, bestLag) = shiftVote(lags)
+    var secondVotes = 0
+    for c in lags where abs(c - bestLag) > 2 {
+        secondVotes = max(secondVotes, lags.filter { abs($0 - c) <= 1 }.count)
+    }
+    m.votes = bestVotes
+    if bestVotes * 2 < voters.count || bestVotes == secondVotes {
+        m.why = "split"
+        return m
+    }
+    let agree = voters.indices.filter { abs(lags[$0] - bestLag) <= 1 }.map { voters[$0] }
+    // The whole lag the agreeing strips peak at together, and below a pixel by a parabola.
+    var lag = bestLag
+    var c0 = shiftNccAll(a, b, agree, lag: lag, minOverlap: minOverlap)
+    for d in [-1, 1] {
+        let c = shiftNccAll(a, b, agree, lag: bestLag + d, minOverlap: minOverlap)
+        if c > c0 {
+            c0 = c
+            lag = bestLag + d
+        }
+    }
+    let sub = shiftParabola(shiftNccAll(a, b, agree, lag: lag - 1, minOverlap: minOverlap), c0,
+                            shiftNccAll(a, b, agree, lag: lag + 1, minOverlap: minOverlap))
+    // Checked on the pixels, in the agreeing strips' columns.
+    var x0 = Int.max
+    var x1 = 0
+    for k in agree {
+        x0 = min(x0, k * width / SHIFT_STRIPS)
+        x1 = max(x1, (k + 1) * width / SHIFT_STRIPS)
+    }
+    let texture = shiftResidual(prev, prev, dy: 1, dx: 0, x0: x0, x1: x1)
+    m.texture = texture
+    if texture < SHIFT_MIN_TEXTURE {
+        m.why = "flat"
+        return m
+    }
+    // Sideways: the columns' ink, over the rows the two share at `lag`, nearest the smaller move.
+    var dx = 0
+    var subX = 0.0
+    let ca = shiftColumns(prev, ground: ground, lag: lag, isPrev: true)
+    let cb = shiftColumns(cur, ground: ground, lag: lag, isPrev: false)
+    if shiftStd(ca) >= SHIFT_FLAT_STD && shiftStd(cb) >= SHIFT_FLAT_STD {
+        let side = shiftBestLag(ca, cb, maxLag: width / 4, minOverlap: max(SHIFT_MIN_OVERLAP, width / 2))
+        if side.lag != 0 && side.score >= SHIFT_STRIP_NCC
+            && shiftResidual(prev, cur, dy: lag, dx: side.lag, x0: 0, x1: width) < 0.8 * shiftResidual(prev, cur, dy: lag, dx: 0, x0: 0, x1: width) {
+            dx = side.lag
+            subX = shiftParabola(shiftNcc(ca, cb, lag: side.lag - 1, minOverlap: width / 2), side.score,
+                                 shiftNcc(ca, cb, lag: side.lag + 1, minOverlap: width / 2))
+        }
+    }
+    let r = dx == 0
+        ? shiftResidual(prev, cur, dy: lag, dx: 0, x0: x0, x1: x1)
+        : shiftResidual(prev, cur, dy: lag, dx: dx, x0: max(x0, dx), x1: x1)
+    m.residual = r
+    if r > SHIFT_RESIDUAL_SHARE * texture + 0.5 {
+        m.why = "changed"
+        return m
+    }
+    m.ok = true
+    m.dy = Double(lag) + sub
+    m.dx = Double(dx) + subX
+    return m
+}
+
 // MARK: - Turning a window's page
 
 /// Thumbnails are this many pixels wide: enough to see a line of text move, and cheap
@@ -1800,6 +2252,9 @@ func installWatch() {
                 emit(["ev": "scroll", "dy": step.dy, "dx": step.dx, "lines": step.lines, "momentum": !event.momentumPhase.isEmpty, "window": Int(window)])
                 // (moving from now until it is still: "settled")
                 moving(window, at: now)
+                // (and how far its content really moves, measured from its pixels: "shift". Never
+                // for a zoom, above: its words grow where they are)
+                if isObserved(window) { ShiftTracker.shared.moved(window, at: Int(now * 1000)) }
                 // (told already: the new look it settles into is said as explained. The companion
                 // off too: the lesson's window is observed for every lesson now. Only a move up or
                 // down is, and only one said to the app (an event that moved nothing, fingers set
@@ -3152,6 +3607,9 @@ func quickThumbnail(_ id: CGWindowID, frame: CGRect) async -> [UInt8]? {
   for CHANGING_BURST_S at most, then twice a second until it is still again.
 */
 let OBSERVE_IDLE_MS = 500
+/// The lesson's own window ("watch") is looked at this often while nothing moves: a little oftener
+/// than others, so a change no input explains is said sooner there (as the Windows helper's).
+let LESSON_IDLE_MS = 250
 let BURST_S: TimeInterval = 1.5
 let TURN_QUIET_S: TimeInterval = 2
 let SCROLL_EXPLAINS_S: TimeInterval = 0.6
@@ -3190,6 +3648,8 @@ var turnsOn: [CGWindowID: Int] = [:]
 var turnEnded: [CGWindowID: TimeInterval] = [:]
 var keyTurnsOn: [CGWindowID: Int] = [:]
 var keyTurnEnded: [CGWindowID: TimeInterval] = [:]
+/// The watched window ("watch"), as the observe loop sees it (`watched` is the main thread's).
+var lessonWindow: CGWindowID?
 
 /// Whether a new look that began at `since` is the wheel scroll last heard at `scrolled`'s. Never
 /// in a window that turns by the page (`page`): a wheel or a swipe there turns a whole page.
@@ -3276,6 +3736,8 @@ func windowMoving(_ window: CGWindowID) -> Bool {
 func observeWindows(_ windows: [CGWindowID], paged: Set<CGWindowID> = []) {
     observeLock.lock()
     let kept = Array(windows.prefix(2))
+    // (the shift tracker lets go of them too, after the lock: ShiftTracker.drop)
+    let dropped = observed.filter { !kept.contains($0) }
     pagedObserved = paged.intersection(kept)
     // (what is known about a window no longer watched goes, but how it last looked, for the
     // latest few: a helper that lives as long as the app would keep every window's otherwise)
@@ -3310,6 +3772,7 @@ func observeWindows(_ windows: [CGWindowID], paged: Set<CGWindowID> = []) {
         going?.cancel()
     }
     observeLock.unlock()
+    for gone in dropped { ShiftTracker.shared.drop(gone) }
 }
 
 /// The windows watched now. None (nothing left to watch, as after the companion went off): the
@@ -3329,8 +3792,11 @@ func lookNow(_ window: CGWindowID, now: TimeInterval) -> Bool {
     defer { observeLock.unlock() }
     let busy = (turnsOn[window] ?? 0) > 0 || now - (turnEnded[window] ?? -.infinity) < TURN_QUIET_S
     guard !busy, now >= lookDue[window] ?? 0 else { return false }
-    let quick = now < (burstUntil[window] ?? 0)
-    lookDue[window] = now + Double(quick ? POLL_MS : OBSERVE_IDLE_MS) / 1000
+    // (often while it moves, until 3 s after its last move, or just after something happened on
+    // it; the lesson's own window a little oftener than others while nothing moves)
+    let moving = motionSince[window].map { since in now - max(since, motionInputAt[window] ?? since) < 3 } ?? false
+    let quick = now < (burstUntil[window] ?? 0) || moving
+    lookDue[window] = now + Double(quick ? POLL_MS : (window == lessonWindow ? LESSON_IDLE_MS : OBSERVE_IDLE_MS)) / 1000
     return true
 }
 
@@ -3343,7 +3809,7 @@ func observeLoop() async {
         for window in windows {
             guard lookNow(window, now: ProcessInfo.processInfo.systemUptime), let target = onScreenWindow(window) else { continue }
             guard let look = await quickThumbnail(window, frame: target.frame) else { continue }
-            looked(window, look)
+            looked(window, look, frame: target.frame)
         }
         // Woken often enough for a burst to start within a tenth of a second; a look is taken
         // only when one is due.
@@ -3351,8 +3817,9 @@ func observeLoop() async {
     }
 }
 
-/// A new thumbnail of an observed window: say "changed" when it has settled into a new look.
-func looked(_ window: CGWindowID, _ look: [UInt8]) {
+/// A new thumbnail of an observed window (at `frame`): say "changed" when it has settled into a new
+/// look, and "settled" when it is still again after it moved.
+func looked(_ window: CGWindowID, _ look: [UInt8], frame: CGRect? = nil) {
     let base = lastSeen(window)
     let now = ProcessInfo.processInfo.systemUptime
     observeLock.lock()
@@ -3370,6 +3837,8 @@ func looked(_ window: CGWindowID, _ look: [UInt8]) {
     var settleMs: Int?
     var explained = false
     let still = previous.map { meanDifference($0, look) < SETTLED_BELOW } ?? false
+    // (a motion no input began, opened by this look: a scroll bar dragged, a trackpad's glide)
+    let wasMoving = motionSince[window] != nil
     if different && newSinceTold {
         let since = differentSince[window] ?? now
         differentSince[window] = since
@@ -3401,13 +3870,23 @@ func looked(_ window: CGWindowID, _ look: [UInt8]) {
         motionSince[window] = nil
         motionInputAt[window] = nil
     }
+    let opened = !wasMoving && motionSince[window] != nil && motionInputAt[window] == nil
+    // (held still, no motion open: the picture a motion's first shift is measured from)
+    let stands = still && settledMs == nil && motionSince[window] == nil
     observeLock.unlock()
+    // The shift tracker follows a motion this look found ("shift"), or keeps its standing picture.
+    if opened {
+        ShiftTracker.shared.moved(window, at: Int(now * 1000), look: true)
+    } else if stands, let frame {
+        ShiftTracker.shared.standing(window, frame: frame, at: Int(now * 1000))
+    }
     if let settleMs {
         var changed: [String: Any] = ["ev": "changed", "window": Int(window), "settleMs": settleMs]
         if explained { changed["explained"] = true }
         emit(changed)
     }
-    if let settledMs { emit(["ev": "settled", "window": Int(window), "settleMs": settledMs]) }
+    // (through the tracker while it follows this window: the motion's last shift comes first)
+    if let settledMs { saySettled(window, settledMs) }
 }
 
 /*
@@ -3483,6 +3962,10 @@ func keyTick(_ windows: [CGWindowID]) async {
     let (posted, starts) = keyTaken(window, keyAt: keyAt)
     guard !posted else { return }
     burst(window)
+    // (a key may scroll it: its motion runs from the key, settled as a wheel's, and is measured as a
+    // wheel's is; typing that only changes words is refused and said lost, never a guess)
+    moving(window, at: keyAt)
+    ShiftTracker.shared.moved(window, at: Int(keyAt * 1000))
     if starts { emit(["ev": "keyed", "window": Int(window)]) }
 }
 
@@ -3525,6 +4008,423 @@ func setCompanion(_ on: Bool, stop: Set<CGWindowID>, privateApps: Set<String>, r
         drag = nil
         observeWindows([])
     }
+}
+
+// MARK: - Following a motion ("shift")
+
+/*
+  The shift tracker: one observed window at a time (the last moved), in a task of its own that
+  ends while nothing moves. Started at each input that moves an observed window (the wheel in
+  installWatch, a key in keyTick), or at a motion the watch's looks found that no input began (a
+  scroll bar, a trackpad's scroll after its events stopped: looked); it stops when the window
+  settles (its last shift said, then "settled") or TRACK_IDLE_STOP_MS after the last input. Each
+  motion is measured from the window's standing picture, taken while it held still (standing):
+  never from one taken after the app may have moved already, as an app gets the same wheel the
+  watch hears. As the Windows helper's Shift.cs Tracker, with one difference: "settled" is still
+  the watch's to say (looked, two looks in a row agree), never this tracker's own test. While the
+  tracker follows the window, that "settled" is handed to it (saySettled, settleVia), so the
+  motion's last shift, said settled, comes just before it.
+
+  Units are points, as the rest of the protocol's: a picture pixel is `pointsPerPixel` points.
+*/
+/// The tracker takes a picture this often at the most while it follows a motion.
+let TRACK_FRAME_MS = 33
+/// It stops this long after the last input (a window that never settles: a video).
+let TRACK_IDLE_STOP_MS = 3000
+/// A shift smaller than this (points) is said with the next.
+let TRACK_SAY_FROM = 0.25
+/// The picture's width at the most (points): a wider window is pictured smaller.
+let TRACK_WIDE_MAX = 1200.0
+/// A still observed window's standing picture is taken again this often (ms) at the most, and a
+/// motion is measured from it only while it is younger than TRACK_REF_MAX_MS.
+let TRACK_REF_EVERY_MS = 1000
+let TRACK_REF_MAX_MS = 2000
+/// A match refused this many frames in a row loses the motion: one refused frame (a capture torn
+/// mid-repaint, a caret blinking) is skipped, and the next is measured from the same held picture.
+let TRACK_REFUSED_MAX = 4
+/// Standing pictures kept at the most (a window's is about 600 KB).
+let TRACK_REFS_KEPT = 6
+
+/// The clock the tracker counts in: milliseconds of uptime, as the watch's TimeIntervals are seconds of it.
+func uptimeMs() -> Int {
+    Int(ProcessInfo.processInfo.systemUptime * 1000)
+}
+
+/// A window's body (its frame less EDGE_SHARE top and bottom, in the window's own points, as a
+/// picture's sourceRect takes it) and the size it is pictured at.
+struct TrackBody {
+    /// The window's frame on the screen when the body was taken.
+    let frame: CGRect
+    let source: CGRect
+    let w: Int
+    let h: Int
+    /// One picture pixel is this many points, down and across alike.
+    let pointsPerPixel: Double
+
+    /// Whether `other` is the same window body in the same place: pictures of the two compare.
+    func sameAs(_ other: TrackBody) -> Bool {
+        w == other.w && h == other.h && abs(frame.minX - other.frame.minX) < 0.5 && abs(frame.minY - other.frame.minY) < 0.5
+            && abs(frame.width - other.frame.width) < 0.5 && abs(frame.height - other.frame.height) < 0.5
+    }
+}
+
+func trackBody(_ frame: CGRect) -> TrackBody? {
+    let cut = (frame.height * CGFloat(EDGE_SHARE)).rounded(.down)
+    let source = CGRect(x: 0, y: cut, width: frame.width, height: frame.height - 2 * cut)
+    guard source.width >= 64, source.height >= 64 else { return nil }
+    let k = min(1.0, TRACK_WIDE_MAX / Double(source.width))
+    let w = max(32, Int((Double(source.width) * k).rounded()))
+    let h = max(32, Int((Double(source.height) * k).rounded()))
+    return TrackBody(frame: frame, source: source, w: w, h: h, pointsPerPixel: Double(source.height) / Double(h))
+}
+
+/// A grey picture of `window`'s body, the window alone (nothing drawn over it: Tutornote's own
+/// pointer and panels are never in it), through its kept handle (throughFilter), or nil.
+func trackPicture(_ window: CGWindowID, _ body: TrackBody) async -> Grey? {
+    let config = SCStreamConfiguration()
+    config.sourceRect = body.source
+    config.width = body.w
+    config.height = body.h
+    config.showsCursor = false
+    config.ignoreShadowsSingleWindow = true
+    config.captureResolution = .nominal
+    let got = try? await throughFilter(window, frame: body.frame) { filter in try await thumbnail(filter, config) }
+    guard let found = got, let pixels = found, pixels.count == body.w * body.h else { return nil }
+    return Grey(w: body.w, h: body.h, g: pixels)
+}
+
+func emitSettled(_ window: CGWindowID, _ ms: Int) {
+    emit(["ev": "settled", "window": Int(window), "settleMs": ms])
+}
+
+/// Whether a motion begun at `start` may be measured from a standing picture done at `refAt`
+/// (`same`: of the same place and size): taken whole before the motion, and not long before.
+func shiftRefFits(refAt: Int, start: Int, same: Bool) -> Bool {
+    same && refAt <= start && start - refAt < TRACK_REF_MAX_MS
+}
+
+/// Whether a frame `step` (meanDifference) from the held picture is no move at all: it is then not
+/// measured, and the held picture stays, so a slow creep of under a pixel a frame adds up against
+/// it until it can be measured, never dropped frame by frame.
+func shiftStill(_ step: Double) -> Bool {
+    step < SETTLED_BELOW / 2
+}
+
+final class ShiftTracker: @unchecked Sendable {
+    static let shared = ShiftTracker()
+
+    /// A window's picture from before it moved: what a motion's first shift is measured from.
+    private struct Ref {
+        let look: Grey
+        let body: TrackBody
+        let at: Int
+    }
+
+    // Everything below is guarded by `lock`, taken only in the plain functions (an async function
+    // takes no NSLock in its body: `locked`).
+    private let lock = NSLock()
+    private var refs: [CGWindowID: Ref] = [:]
+    private var standingBusy: Set<CGWindowID> = []
+    private var looping = false
+    private var window: CGWindowID = 0
+    private var lastInput = 0
+    private var runStart = 0
+    private var settleAsked = false
+    private var settleMs = -1
+    /// Each motion followed is a run; `followed`, the last one begun, and `following` while one goes.
+    private var run = 0
+    private var followed = 0
+    private var following = false
+    /// The run was begun by a look the watch found changed, no input (moved `look`): it may be no
+    /// scroll at all (a video playing, a dialog), so a match refused says nothing ("lost" is for a
+    /// scroll that went unmeasured); its measured moves are said as any.
+    private var byLook = false
+    /// The run being followed was lost (a match refused for good): a new input then begins a new
+    /// run, measured from the last frame taken before it, instead of being swallowed by the lost one.
+    private var runLost = false
+
+    private func locked<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+
+    /// An input (or, `look`, a look the watch found changed: a scroll bar dragged, a trackpad's
+    /// scroll) moved `h` (an observed window) at `now` (uptimeMs).
+    func moved(_ h: CGWindowID, at now: Int, look: Bool = false) {
+        let start = locked { () -> Bool in
+            if window != h || !following || (runLost && !look) {
+                window = h
+                run += 1
+                runStart = now
+                byLook = look
+                runLost = false
+            } else if !look {
+                byLook = false
+            }
+            lastInput = now
+            settleAsked = false
+            settleMs = -1
+            if looping { return false }
+            looping = true
+            return true
+        }
+        if start { Task.detached(priority: .utility) { await self.loop() } }
+    }
+
+    /// `h` is no longer observed: its shifts stop, unsaid, and its standing picture goes.
+    func drop(_ h: CGWindowID) {
+        locked {
+            refs[h] = nil
+            if window == h {
+                window = 0
+                run += 1
+            }
+        }
+    }
+
+    /// `h` settled after `ms` (the watch's test). While the tracker follows it, its shifts end with
+    /// one said settled and then the tracker says "settled" itself (true), so the page and main hear
+    /// the motion's last move before its end; else false, and the watch says it.
+    func settleVia(_ h: CGWindowID, ms: Int) -> Bool {
+        locked {
+            guard window == h, following else { return false }
+            settleAsked = true
+            settleMs = ms
+            return true
+        }
+    }
+
+    /// `h`, at `frame`, holds still (the watch's look of it unchanged, no motion open) at `now`: its
+    /// standing picture is taken again, TRACK_REF_EVERY_MS after the last at the soonest.
+    func standing(_ h: CGWindowID, frame: CGRect, at now: Int) {
+        guard let body = trackBody(frame) else { return }
+        let go = locked { () -> Bool in
+            if following && window == h { return false }
+            if standingBusy.contains(h) { return false }
+            if let known = refs[h], now - known.at < TRACK_REF_EVERY_MS { return false }
+            standingBusy.insert(h)
+            return true
+        }
+        guard go else { return }
+        Task.detached(priority: .utility) {
+            let look = await trackPicture(h, body)
+            // (`at`, when the picture was done: a motion begun before then is not measured from it)
+            self.keepStanding(h, look, body, at: uptimeMs())
+        }
+    }
+
+    private func keepStanding(_ h: CGWindowID, _ look: Grey?, _ body: TrackBody, at: Int) {
+        locked {
+            standingBusy.remove(h)
+            guard let look, !(following && window == h) else { return }
+            refs[h] = Ref(look: look, body: body, at: at)
+            while refs.count > TRACK_REFS_KEPT, let oldest = refs.min(by: { $0.value.at < $1.value.at })?.key, oldest != h {
+                refs[oldest] = nil
+            }
+        }
+    }
+
+    // ---- the task ------------------------------------------------------------------------------
+
+    /// The next run to follow (marking it followed), or nil: none, and the task ends.
+    private func nextRun() -> Bool {
+        locked {
+            if window == 0 || run == followed {
+                looping = false
+                return false
+            }
+            followed = run
+            following = true
+            return true
+        }
+    }
+
+    /// A run's end: the settle it was asked for and did not take, if any (said all the same).
+    private func runEnded() -> Int {
+        locked {
+            following = false
+            let ms = settleAsked ? settleMs : -1
+            settleAsked = false
+            settleMs = -1
+            return ms
+        }
+    }
+
+    private func loop() async {
+        while nextRun() {
+            let h = await follow()
+            let ms = runEnded()
+            if ms >= 0, h != 0 { emitSettled(h, ms) }
+        }
+    }
+
+    /// This motion's shifts stop here: one said "lost" (dy and dx 0), with why (nothing said for a
+    /// motion only a look began: byLook).
+    private func lost(_ h: CGWindowID, _ why: String) {
+        if locked({ byLook }) { return }
+        emit(["ev": "shift", "window": Int(h), "dy": 0, "dx": 0, "settled": false, "lost": true, "why": why])
+    }
+
+    private func current() -> (h: CGWindowID, run: Int, start: Int) {
+        locked { (window, run, runStart) }
+    }
+
+    /// The standing picture of `h` for a motion begun at `start` (taken off the keep: used or unfit,
+    /// the next motion is measured from a picture taken after this one).
+    private func takeRef(_ h: CGWindowID, start: Int, body: TrackBody) -> Grey? {
+        locked {
+            let known = refs[h]
+            refs[h] = nil
+            guard let known, shiftRefFits(refAt: known.at, start: start, same: known.body.sameAs(body)) else { return nil }
+            return known.look
+        }
+    }
+
+    private func setRunLost() {
+        locked { runLost = true }
+    }
+
+    private func clearRunLost() {
+        locked { runLost = false }
+    }
+
+    /// What a frame begun at `t0` is to do: a settle asked (and its ms), or the run is over (stale).
+    private func frameState(_ h: CGWindowID, run myRun: Int, at t0: Int) -> (settle: Bool, asked: Int, stale: Bool) {
+        locked {
+            let settle = settleAsked
+            let asked = settleMs
+            let stale = window != h || run != myRun || t0 - lastInput > TRACK_IDLE_STOP_MS
+            if settle && !stale {
+                settleAsked = false
+                settleMs = -1
+            }
+            return (settle, asked, stale)
+        }
+    }
+
+    /// A run ended by a new one on the same window: it is measured from this run's last frame.
+    private func handOn(_ h: CGWindowID, run myRun: Int, last: Grey, body: TrackBody, at: Int) {
+        locked {
+            if window == h && run != myRun { refs[h] = Ref(look: last, body: body, at: at) }
+        }
+    }
+
+    /// The motion settled where `cur` shows it: the next motion's standing picture.
+    private func settledAt(_ h: CGWindowID, run myRun: Int, cur: Grey, body: TrackBody) {
+        locked {
+            refs[h] = Ref(look: cur, body: body, at: uptimeMs())
+            if run == myRun { window = 0 }
+        }
+    }
+
+    /// Follows the current run to its end; the window it followed (0: none).
+    private func follow() async -> CGWindowID {
+        let (h, myRun, start) = current()
+        if h == 0 { return 0 }
+        guard let target = onScreenWindow(h), let body = trackBody(target.frame) else { return h }
+        var prev = takeRef(h, start: start, body: body)
+        var carryY = 0.0
+        var carryX = 0.0
+        // (`said`: a shift was said in this motion; its last, settled, is said only then, or with a
+        // move of its own: a motion that measured no move at all ends with "settled" alone)
+        var isLost = false
+        var said = false
+        var refused = 0
+        clearRunLost()
+        if prev == nil {
+            // (no picture from before it moved: what moved before a first one taken now would be
+            // missed, so this motion is not measured at all rather than measured short)
+            prev = await trackPicture(h, body)
+            if prev == nil { return h }
+            isLost = true
+            setRunLost()
+            lost(h, "reference")
+        }
+        guard var held = prev else { return h }
+        // (the last frame and when it was begun: a new run that ends this one is measured from it)
+        var last = held
+        var lastAt = uptimeMs()
+        while true {
+            let t0 = uptimeMs()
+            let state = frameState(h, run: myRun, at: t0)
+            // (a settle asked and not taken here is said by loop; a new run on the same window, begun
+            // after the last frame was taken, is measured from that frame)
+            if state.stale {
+                handOn(h, run: myRun, last: last, body: body, at: lastAt)
+                return h
+            }
+            // (a window moved or resized on the screen: its pictures no longer compare)
+            guard let now = onScreenWindow(h), let nowBody = trackBody(now.frame), nowBody.sameAs(body) else {
+                if !isLost { lost(h, "frame") }
+                if state.settle { emitSettled(h, state.asked) }
+                return h
+            }
+            let shotAt = uptimeMs()
+            guard let cur = await trackPicture(h, body) else {
+                if !isLost { lost(h, "capture") }
+                if state.settle { emitSettled(h, state.asked) }
+                return h
+            }
+            let step = meanDifference(cur.g, held.g)
+            if !isLost && !shiftStill(step) {
+                let m = shiftMeasure(held, cur)
+                if !m.ok {
+                    // (no guess: a frame refused is skipped, the held picture kept; refused again and
+                    // again, the page is told this motion's shifts stop here)
+                    refused += 1
+                    if refused >= TRACK_REFUSED_MAX {
+                        isLost = true
+                        setRunLost()
+                        lost(h, m.why)
+                    }
+                } else {
+                    refused = 0
+                    carryY += m.dy * body.pointsPerPixel
+                    carryX += m.dx * body.pointsPerPixel
+                }
+            }
+            // (only the watch settles a motion here: then its last shift is said first, and
+            // "settled" after)
+            let ends = state.settle
+            // (it ends on a frame that would not match: what moved since the last match is unknown)
+            if ends && !isLost && refused > 0 {
+                isLost = true
+                lost(h, "end")
+            }
+            if !isLost && (abs(carryY) >= TRACK_SAY_FROM || abs(carryX) >= TRACK_SAY_FROM || (ends && (said || carryY != 0 || carryX != 0))) {
+                said = true
+                emit(["ev": "shift", "window": Int(h), "dy": (carryY * 100).rounded() / 100, "dx": (carryX * 100).rounded() / 100, "settled": ends])
+                carryY = 0
+                carryX = 0
+            }
+            // (the held picture moves on only once a frame moved, or the motion is lost: shiftStill)
+            let skipped = !isLost && refused > 0
+            if !skipped && (isLost || !shiftStill(step)) { held = cur }
+            last = cur
+            lastAt = shotAt
+            if ends {
+                emitSettled(h, state.asked)
+                settledAt(h, run: myRun, cur: cur, body: body)
+                return h
+            }
+            let rest = TRACK_FRAME_MS - (uptimeMs() - t0)
+            if rest > 0 { await sleepMs(rest) }
+        }
+    }
+}
+
+/// Whether `window` is observed now (the tracker follows only those).
+func isObserved(_ window: CGWindowID) -> Bool {
+    observeLock.lock()
+    defer { observeLock.unlock() }
+    return observed.contains(window)
+}
+
+/// The watch's "settled" for `window`, after `ms`: through the tracker while it follows the window
+/// (its last shift first), else at once.
+func saySettled(_ window: CGWindowID, _ ms: Int) {
+    if !ShiftTracker.shared.settleVia(window, ms: ms) { emitSettled(window, ms) }
 }
 
 // MARK: - Circle to explain
@@ -3932,8 +4832,250 @@ func selfTest() -> Bool {
     identSelfTest(check)
     chordSelfTest(check)
     circleSelfTest(check)
+    shiftSelfTest(check)
+    readTimeSelfTest(check)
     return ok
 }
+
+/*
+  The shift matcher (shiftMeasure) and the tracker's rules, on pages drawn here from a made-up
+  sequence (TestRandom: a plain LCG, so not the Windows selftest's pages; the checks are the same
+  properties of them, as the Windows helper's SelfTest.cs).
+*/
+/// A small repeatable random sequence for the selftest's pages.
+struct TestRandom {
+    private var state: UInt64
+
+    init(_ seed: UInt64) {
+        state = seed &* 6364136223846793005 &+ 1442695040888963407
+    }
+
+    /// 0..<n.
+    mutating func next(_ n: Int) -> Int {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        return Int((state >> 33) % UInt64(max(n, 1)))
+    }
+
+    /// 0..<1.
+    mutating func unit() -> Double {
+        Double(next(1 << 24)) / Double(1 << 24)
+    }
+}
+
+func testFlat(_ w: Int, _ h: Int, _ v: UInt8) -> Grey {
+    Grey(w: w, h: h, g: [UInt8](repeating: v, count: w * h))
+}
+
+/// A made-up page w x h, `k` rows to a point: lines of words (dark strokes on white), each line of
+/// its own length, paragraphs with gaps, a margin each side.
+func testPage(_ rnd: inout TestRandom, _ w: Int, _ h: Int, _ k: Int) -> Grey {
+    var g = testFlat(w, h, 255)
+    var y = 6 * k
+    while y < h - 20 * k {
+        let lines = 2 + rnd.next(6)
+        var l = 0
+        while l < lines && y < h - 20 * k {
+            var x = 30 + rnd.next(10)
+            let end = w - 30 - rnd.next(w / 2)
+            let tall = (9 + rnd.next(5)) * k
+            while x < end {
+                let word = 8 + rnd.next(40)
+                for c in x..<min(end, x + word) {
+                    if rnd.next(3) == 0 { continue }
+                    let top = y + rnd.next(tall / 3 + 1)
+                    let bottom = y + tall - rnd.next(tall / 4 + 1)
+                    let ink = UInt8(rnd.next(70))
+                    for r in stride(from: top, to: bottom, by: 1) { g.g[r * w + c] = ink }
+                }
+                x += word + 4 + rnd.next(5)
+            }
+            y += tall + (6 + rnd.next(6)) * k
+            l += 1
+        }
+        y += (10 + rnd.next(30)) * k
+    }
+    return g
+}
+
+/// Rows from..<from+h of a picture.
+func testRows(_ g: Grey, _ from: Int, _ h: Int) -> Grey {
+    Grey(w: g.w, h: h, g: Array(g.g[(from * g.w)..<((from + h) * g.w)]))
+}
+
+/// A picture `k` times taller averaged down to h rows, from row `from` of it.
+func testDown(_ g: Grey, _ k: Int, _ from: Int, _ h: Int) -> Grey {
+    var r = testFlat(g.w, h, 0)
+    for y in 0..<h {
+        for x in 0..<g.w {
+            var sum = 0
+            for j in 0..<k { sum += Int(g.g[(from + y * k + j) * g.w + x]) }
+            r.g[y * g.w + x] = UInt8(sum / k)
+        }
+    }
+    return r
+}
+
+/// A picture moved `dx` columns left (white comes in at the right).
+func testCols(_ g: Grey, _ dx: Int) -> Grey {
+    var r = testFlat(g.w, g.h, 255)
+    for y in 0..<g.h {
+        var x = 0
+        while x + dx < g.w {
+            r.g[y * g.w + x] = g.g[y * g.w + x + dx]
+            x += 1
+        }
+    }
+    return r
+}
+
+func testSaid(_ m: ShiftMatch) -> String {
+    m.ok ? String(format: "dy %.2f, dx %.2f", m.dy, m.dx) : "refused: \(m.why)"
+}
+
+func shiftSelfTest(_ check: (String, Bool) -> Void) {
+    check("a creep under a fifth of a grey level a frame is held, not measured", shiftStill(0.15) && !shiftStill(0.25))
+    check("a motion is measured from a standing picture taken before it, not long before",
+          shiftRefFits(refAt: 1000, start: 1500, same: true) && !shiftRefFits(refAt: 1600, start: 1500, same: true)
+            && !shiftRefFits(refAt: 1000, start: 1000 + TRACK_REF_MAX_MS, same: true) && !shiftRefFits(refAt: 1000, start: 1500, same: false))
+    if let body = trackBody(CGRect(x: 100, y: 50, width: 2400, height: 1000)) {
+        check("a wide window is pictured 1200 points wide at the most, its body without its bars",
+              body.w == 1200 && body.h == 380 && abs(body.pointsPerPixel - 2) < 0.01 && body.source.minY == 120)
+    } else {
+        check("a wide window has a body", false)
+    }
+    check("a window too small to follow has none", trackBody(CGRect(x: 0, y: 0, width: 50, height: 400)) == nil)
+
+    // Profiles
+    var rnd = TestRandom(7)
+    var smooth = [Double](repeating: 0, count: 600)
+    var v = 0.0
+    for i in smooth.indices {
+        v = 0.8 * v + rnd.unit() * 200 - 100
+        smooth[i] = v
+    }
+    func lerp(_ a: [Double], _ at: Double) -> Double {
+        let i = Int(at.rounded(.down))
+        let f = at - Double(i)
+        return a[i] * (1 - f) + a[i + 1] * f
+    }
+    let at = (0..<500).map { smooth[$0 + 40] }
+    let moved = (0..<500).map { lerp(smooth, Double($0) + 40 + 10.5) }
+    let found = shiftBestLag(at, moved, maxLag: 300, minOverlap: 125)
+    let sub = shiftParabola(shiftNcc(at, moved, lag: found.lag - 1, minOverlap: 125), found.score,
+                            shiftNcc(at, moved, lag: found.lag + 1, minOverlap: 125))
+    check(String(format: "a profile moved 10.5 rows is found 10.5 rows on (%.2f)", Double(found.lag) + sub),
+          abs(Double(found.lag) + sub - 10.5) < 0.3 && found.score > 0.95)
+    check("a flat profile correlates with nothing", shiftNcc([Double](repeating: 0, count: 100), at, lag: 0, minOverlap: 16) == -2)
+    check("a parabola's peak is where it is, within half a step",
+          abs(shiftParabola(0.8, 1, 0.6) + 0.1667) < 0.01 && abs(shiftParabola(0.6, 1, 0.8) - 0.1667) < 0.01 && shiftParabola(1, 1, 1) == 0)
+    let vote = shiftVote([30, 31, 30, 0, 29, 0])
+    check("strips vote, and the lag most agree on wins", vote.votes == 4 && abs(vote.best - 30) <= 1)
+
+    // Pictures of a page of made-up lines
+    let doc = testPage(&rnd, 640, 1400, 1)
+    let prev = testRows(doc, 100, 500)
+    var m = shiftMeasure(prev, testRows(doc, 137, 500))
+    check("a page scrolled 37 points down is said moved 37 up (\(testSaid(m)))", m.ok && abs(m.dy - 37) < 0.3 && abs(m.dx) < 0.3)
+    m = shiftMeasure(testRows(doc, 300, 500), testRows(doc, 280, 500))
+    check("scrolled back up 20, it is said moved 20 down (\(testSaid(m)))", m.ok && abs(m.dy + 20) < 0.3)
+    m = shiftMeasure(prev, testRows(doc, 100, 500))
+    check("a page that held still moved 0", m.ok && abs(m.dy) < 0.3 && abs(m.dx) < 0.3)
+    m = shiftMeasure(testRows(doc, 100, 500), testRows(doc, 100 + 330, 500))
+    check("a jump of most of the window is still found (\(testSaid(m)))", m.ok && abs(m.dy - 330) < 0.3)
+    var tallRnd = TestRandom(11)
+    let tall = testPage(&tallRnd, 640, 4 * 900, 4)
+    m = shiftMeasure(testDown(tall, 4, 0, 500), testDown(tall, 4, 4 * 12 + 2, 500))
+    check("a move below a pixel is found (12.5: \(testSaid(m)))", m.ok && abs(m.dy - 12.5) < 0.3)
+    var side = testRows(doc, 137, 500)
+    for y in 0..<side.h {
+        for x in 0..<(side.w / SHIFT_STRIPS) { side.g[y * side.w + x] = prev.g[y * prev.w + x] }
+    }
+    m = shiftMeasure(prev, side)
+    check("a sidebar that stays where it is is outvoted (\(testSaid(m)))", m.ok && abs(m.dy - 37) < 0.3)
+    m = shiftMeasure(prev, testCols(testRows(doc, 137, 500), 6))
+    check("a page moved 6 points left too is said so (\(testSaid(m)))", m.ok && abs(m.dy - 37) < 0.3 && abs(m.dx - 6) < 0.5)
+    m = shiftMeasure(testFlat(640, 500, 255), testFlat(640, 500, 255))
+    check("a blank page is too flat to match: nothing is said", !m.ok && m.why == "flat")
+    var otherRnd = TestRandom(99)
+    m = shiftMeasure(prev, testRows(testPage(&otherRnd, 640, 1400, 1), 100, 500))
+    check("another page altogether is no shift: nothing is said (\(m.why))", !m.ok)
+    var half = testRows(doc, 137, 500)
+    var fifthRnd = TestRandom(5)
+    let other = testRows(testPage(&fifthRnd, 640, 1400, 1), 0, 500)
+    for i in (half.g.count / 2)..<half.g.count { half.g[i] = other.g[i] }
+    m = shiftMeasure(prev, half)
+    check("a page half of which changed is no shift either (\(m.why))", !m.ok)
+    // (each strip mirrored: every strip's row profile is the same, its pixels are not)
+    var mirrored = testRows(doc, 137, 500)
+    let sw = mirrored.w / SHIFT_STRIPS
+    for y in 0..<mirrored.h {
+        for k in 0..<SHIFT_STRIPS {
+            for x in 0..<(sw / 2) {
+                mirrored.g.swapAt(y * mirrored.w + k * sw + x, y * mirrored.w + k * sw + sw - 1 - x)
+            }
+        }
+    }
+    m = shiftMeasure(prev, mirrored)
+    check("words whose rows match but whose pixels do not are no shift (\(m.why))", !m.ok && m.why == "changed")
+    // (lines all alike: a wrong line's lag must be refused, never said)
+    var even = testFlat(640, 1400, 255)
+    var evenRnd = TestRandom(21)
+    for y in stride(from: 10, to: even.h - 14, by: 22) {
+        for x in 30..<610 where evenRnd.next(3) != 0 {
+            let top = y + evenRnd.next(3)
+            let bottom = y + 12 - evenRnd.next(3)
+            for r in stride(from: top, to: bottom, by: 1) { even.g[r * 640 + x] = 30 }
+        }
+    }
+    m = shiftMeasure(testRows(even, 100, 500), testRows(even, 151, 500))
+    check("on lines all alike the shift is right or refused, never another line's (\(testSaid(m)))", !m.ok || abs(m.dy - 51) < 0.3)
+    check("pictures of different sizes are no match", shiftMeasure(prev, testRows(doc, 100, 400)).why == "size")
+    var wideRnd = TestRandom(3)
+    let wide = testPage(&wideRnd, 1200, 1400, 1)
+    let started = DispatchTime.now()
+    for i in 0..<5 { _ = shiftMeasure(testRows(wide, 100, 530), testRows(wide, 100 + 9 * i, 530)) }
+    let each = msSince(started) / 5
+    check("a window's match takes little (\(each) ms on 1200 x 530)", each < 40)
+}
+
+/// A pass of Vision that never ends is given up (recognizeWithin), and the next one reads.
+func readTimeSelfTest(_ check: (String, Bool) -> Void) {
+    check("a read answers inside the app's 30 s wait, even read twice behind a stuck pass", 2 * READ_MS < 30000)
+    guard let context = CGContext(data: nil, width: 200, height: 40, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else {
+        check("a picture to read is drawn", false)
+        return
+    }
+    context.setFillColor(CGColor(gray: 1, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 200, height: 40))
+    guard let image = context.makeImage() else {
+        check("a picture to read is drawn", false)
+        return
+    }
+    func timed(stall: Int, ms: Int) -> Int {
+        recognizeStall.set(stall)
+        let answer = SelfTestAnswer()
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            let started = DispatchTime.now()
+            do {
+                _ = try await recognizeWithin(image, .fast, ms: ms)
+                answer.ms = -2
+            } catch is RecognizeStuck {
+                answer.ms = msSince(started)
+            } catch {
+                answer.ms = -3
+            }
+            done.signal()
+        }
+        done.wait()
+        return answer.ms
+    }
+    let stuck = timed(stall: 600, ms: 100)
+    check("a pass stuck past its time is given up (\(stuck) ms)", stuck >= 90 && stuck < 500)
+    check("and the next one reads", timed(stall: 0, ms: 5000) == -2)
+}
+
 
 /// A drag's stroke as a lift says it, and a crop's rectangle, size and JPEG ("Circle to explain").
 func circleSelfTest(_ check: (String, Bool) -> Void) {
@@ -5045,6 +6187,9 @@ func handle(_ line: String) {
         }
         installWatch()
         watched = number
+        observeLock.lock()
+        lessonWindow = number
+        observeLock.unlock()
         onTopAt = nil
         // How things stand now, as the lesson starts: later ones come as the student switches apps.
         if let app = NSWorkspace.shared.frontmostApplication {
@@ -5054,6 +6199,9 @@ func handle(_ line: String) {
         startIdent()
     case "unwatch":
         watched = nil
+        observeLock.lock()
+        lessonWindow = nil
+        observeLock.unlock()
         pressedAt = nil
         onTopAt = nil
         stopIdent()
@@ -5087,6 +6235,8 @@ func handle(_ line: String) {
         startCrop(id: id, window: number, asked: CGRect(x: box[0], y: box[1], width: box[2], height: box[3]))
     default:
         log("[screen] unknown command: \(cmd)")
+        // (one that waits for an answer gets one, so the app's call does not wait for ever)
+        if let id = message["id"] as? Int { emit(["id": id, "ev": "error", "code": "bad_command"]) }
     }
 }
 

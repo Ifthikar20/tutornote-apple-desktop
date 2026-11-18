@@ -52,6 +52,7 @@ import {
   type ScreenScroll,
   type ScreenSettled,
   type ScreenTap,
+  type ScreenShift,
   type ScreenZoom,
 } from "./screen";
 import { toLocal, withoutDrawing } from "./screenRead";
@@ -1075,6 +1076,14 @@ function onOver(over: ScreenOver): void {
       console.log(`[companion] another document under the cursor in window ${window}: glanced at again`);
     }
   }
+  // A window moved since its glance (dragged by its title bar, same size: no new look) is read
+  // again where it is now, or a tap there would be judged against words that are no longer there.
+  const was = kept?.read.frame;
+  const f = over.frame;
+  if (kept && was && f && (Math.abs(was.x - f.x) > 1 || Math.abs(was.y - f.y) > 1 || Math.abs(was.w - f.w) > 1 || Math.abs(was.h - f.h) > 1)) {
+    kept.stale = true;
+    markReadStale(window);
+  }
   if (kept && !kept.stale) {
     if (!pageHas.has(window)) sendGlance(window, kept);
     return;
@@ -1515,6 +1524,20 @@ function onZoom(zoom: ScreenZoom): void {
   windowMoving(zoom.window);
 }
 
+/** The content's true move in a window, measured from its pixels by the helper while it moves
+ *  (screen.ts "shift"): the page moves that window's glance by it, and the window is glanced at
+ *  again once still, as for a zoom. The last one (settled) comes just before the helper's
+ *  "settled", which takes the glance; one the helper lost (lost) waits for that "settled" too.
+ *  The lesson's own window: screenTeach.ts follows it. */
+function onShift(shift: ScreenShift): void {
+  if (!on || held || privateWindows.has(shift.window)) return;
+  markReadStale(shift.window);
+  if (shift.window === screenTeachLesson()?.window) return;
+  sendToPage("screen-teach:shift", { window: shift.window, dy: shift.dy, dx: shift.dx, settled: shift.settled });
+  if (shift.settled || shift.lost) return;
+  windowMoving(shift.window);
+}
+
 /**
  * A window that was scrolled, zoomed or changed is still again (screen.ts "settled"). Not the
  * lesson's own window (screenTeach.ts tells its page), not while held, never a private window. The
@@ -1754,12 +1777,14 @@ function onLift(lift: ScreenLift): void {
   if (!local) return;
   const info = windowApps.get(lift.window);
   const priv = lift.private || privateWindows.has(lift.window) || isPrivateApp(info?.bundle);
-  if (!priv) lifts = [...lifts, liftOf(lift, Date.now())].slice(-LIFTS_KEPT);
+  // (the press point kept with the stroke: a selection drag's stroke may not start where it was pressed)
+  const press = lift.fx !== undefined && lift.fy !== undefined ? { x: lift.fx, y: lift.fy } : null;
+  if (!priv) lifts = [...lifts, liftOf(press ? { ...lift, points: [...lift.points, press] } : lift, Date.now())].slice(-LIFTS_KEPT);
   const points = lift.points.map((p) => localPoint(p)).filter((p): p is Point => p !== null);
   // (`ring` false: a selection drag, from where it was pressed, `fx`, `fy`, to the lift: the page
   // explains the words between, as it does what a ring takes in. A helper older than it says rings
   // alone: screenWatch.ts liftEventOf)
-  const from = lift.fx !== undefined && lift.fy !== undefined ? localPoint({ x: lift.fx, y: lift.fy }) : null;
+  const from = press ? localPoint(press) : null;
   sendToPage("screen-teach:lift", {
     window: lift.window,
     x: local.x,
@@ -1866,6 +1891,7 @@ export function installCompanion(): void {
   // (a window still again after it moved, and a zoom on a wheel: the glance after either)
   watchEvents.on("settled", onSettled);
   watchEvents.on("zoom", onZoom);
+  watchEvents.on("shift", onShift);
   // (a drag's end: circle to explain)
   watchEvents.on("lift", onLift);
   // (another document in a window it knows, while a lesson watches one)

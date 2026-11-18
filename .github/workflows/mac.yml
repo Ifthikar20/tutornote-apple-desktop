@@ -19,10 +19,16 @@
 #   APPLE_ID              the Apple ID that owns the certificate
 #   APPLE_APP_SPECIFIC_PASSWORD   an app-specific password for that Apple ID
 #   APPLE_TEAM_ID         the 10-character team ID
-#   WEB_REPO_TOKEN        read access to playstudy-card-dash if it is private (its build goes inside the app)
+#   WEB_REPO_TOKEN        read access to tutornote-web if it is private (its build goes inside the app)
+# A tag build refuses to go on unsigned: without the certificate and the Apple ID it stops, and
+# its app is checked (codesign, the notarisation ticket) before anything is published. An unsigned
+# Mac app cannot update itself.
 # And one repository variable (Settings > Secrets and variables > Actions > Variables):
-#   WEB_REF               the web app's reviewed commit (or tag) to build; unset, its default
-#                         branch, as before
+#   WEB_REF               the web app's commit to build, as a sha (7-40 hex): the one live on the
+#                         site, so the web is deployed first, then WEB_REF set to it, then the
+#                         desktop apps built. It must be on tutornote-web's feature/october, and
+#                         the build stops if it is unset or is not.
+# A tag (v1.0.1) must be package.json's version, or the build stops.
 #
 # Every action is pinned to a commit, with its tag beside it, so a tag moved later cannot change
 # what runs here. To move one on: git ls-remote https://github.com/actions/<name> refs/tags/<tag>
@@ -60,23 +66,45 @@ jobs:
       # itself never runs in CI, and electron-builder fetches its own copy in the package job.
       - run: npm ci --ignore-scripts
 
+      - name: Check the tag is the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          [ "${GITHUB_REF#refs/tags/v}" = "$(node -p 'require("./package.json").version')" ] || { echo '::error::tag != package.json version'; exit 1; }
+          node scripts/release.mjs --ci
+
+      - name: Check WEB_REF names a commit
+        env:
+          WEB_REF: ${{ vars.WEB_REF }}
+        run: |
+          [[ "$WEB_REF" =~ ^[0-9a-f]{7,40}$ ]] || { echo "::error::set the repository variable WEB_REF to the live web commit's sha (7-40 hex), not '$WEB_REF'"; exit 1; }
+
       - name: Build the main process and the helpers
         run: npm run build
 
       # The web app's build goes inside the app (README: how it is put together). If the
       # web repo is private, WEB_REPO_TOKEN is a token that can read it (a fine-grained
-      # PAT with Contents: read on playstudy-card-dash); a public repo needs none.
+      # PAT with Contents: read on tutornote-web); a public repo needs none. Its whole history,
+      # so WEB_REF can be checked against feature/october.
       - name: Check out the web app
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: Ifthikar20/playstudy-card-dash
-          ref: ${{ vars.WEB_REF }}
+          repository: Ifthikar20/tutornote-web
+          ref: feature/october
+          fetch-depth: 0
           token: ${{ secrets.WEB_REPO_TOKEN || github.token }}
           path: .web
           persist-credentials: false
 
+      # Only WEB_REF's committed files are built (scripts/build-renderer.mjs: git archive), with the
+      # committed .env.off.example as the build's settings.
       - name: Build the web app into renderer/
-        run: scripts/build-renderer.sh
+        env:
+          WEB_REF: ${{ vars.WEB_REF }}
+        run: |
+          set -euo pipefail
+          git -C .web branch -r --contains "$WEB_REF" | grep -q 'origin/feature/october' || { echo "::error::WEB_REF $WEB_REF is not on tutornote-web's feature/october"; exit 1; }
+          cp .web/.env.off.example .web/.env.off
+          TUTORNOTE_WEB_DIR=.web TUTORNOTE_WEB_REF="$WEB_REF" TUTORNOTE_WEB_BUILD_DIR="$RUNNER_TEMP/web" node scripts/build-renderer.mjs
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -144,8 +172,19 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then PUBLISH=always; else PUBLISH=never; fi
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            PUBLISH=always
+            [ -n "$CSC_LINK" ] && [ -n "$APPLE_ID" ] || { echo "::error::a tag build must be signed and notarised: MAC_CERT_P12_BASE64 or APPLE_ID is not set"; exit 1; }
+          else
+            PUBLISH=never
+          fi
           npx electron-builder --mac --publish "$PUBLISH" --config electron-builder.config.cjs
+          if [ -n "$CSC_LINK" ]; then
+            codesign --verify --deep --strict --verbose=2 release/mac-universal/Tutornote.app
+            codesign -dv release/mac-universal/Tutornote.app/Contents/Resources/tutornote-screen 2>&1 | grep -q 'Identifier=app.tutornote.desktop.screen' || { echo "::error::the screen helper's identifier changed (Screen Recording grants would be lost)"; exit 1; }
+          fi
+          if [ -n "$APPLE_ID" ]; then xcrun stapler validate release/*.dmg; fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

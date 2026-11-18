@@ -2400,8 +2400,10 @@ function onLessonZoom(zoom: ScreenZoom): void {
   w.webContents.send("screen-teach:zoom", { run: current.run, window: zoom.window });
 }
 
-/** The content's true move measured from its pixels (screen.ts "shift"): Windows' helper alone
- *  says it, so on this Mac it never comes; passed on all the same, so one page serves both. */
+/** The lesson's window's content moved by (dx, dy), measured from its pixels (the helper's
+ *  ShiftTracker, screen.ts "shift"): the page moves its marks by exactly that and keeps them up.
+ *  Not aside, mid-scroll or hidden: then the window is read again (scrollMissed), but only for a
+ *  move that moved something. */
 function onLessonShift(shift: ScreenShift): void {
   const current = lesson;
   const w = live();
@@ -2412,7 +2414,10 @@ function onLessonShift(shift: ScreenShift): void {
     scrollMissedAt = 0;
     return scrollMissed(current, w);
   }
-  if (aside || scrolling > 0) return scrollMissed(current, w);
+  if (aside || scrolling > 0 || !w.isVisible()) {
+    if (shift.dy !== 0 || shift.dx !== 0) scrollMissed(current, w);
+    return;
+  }
   w.webContents.send("screen-teach:shift", { run: current.run, window: shift.window, dy: shift.dy, dx: shift.dx, settled: shift.settled });
 }
 
@@ -2507,6 +2512,10 @@ function stepAside(away: boolean): void {
     }
     w.showInactive();
     syncBoard();
+    // (the window may have scrolled or changed while the student was away, unheard: the page reads
+    // it again before its marks show)
+    scrollMissedAt = 0;
+    scrollMissed(current, w);
     w.webContents.send("screen-teach:command", "resume");
   }
 }
