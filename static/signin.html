@@ -157,6 +157,635 @@
         *, *::before, *::after { animation: none !important; transition: none !important; }
         .leaves { display: none; }
       }
+
+      /* The tutor hanging from the logo by one hand, as on the website's sign-in page (the web app's
+         components/auth/LogoHang.tsx; the founder, 2026-11-17). Room under the logo for it, and
+         smaller with the logo in a shorter window, round the point its hand holds. Its own
+         stylesheets go between the markers, written by scripts/sign-in-tutor.mjs from the web app. */
+      .logo-wrap { margin: 0 0 40px; }
+      .logo-wrap .logo { margin: 0; }
+      @media (max-height: 880px) { .logo-wrap { margin-bottom: 34px; } .logo-wrap .logo-hang { transform: scale(.86); transform-origin: 0 0; } }
+      @media (max-height: 700px) { .logo-wrap { margin-bottom: 28px; } .logo-wrap .logo-hang { transform: scale(.77); transform-origin: 0 0; } }
+      /* sign-in-tutor:start */
+/* src/components/guide/tutorCharacters.css (web) */
+/* ---------------------------------------------------------------------------
+   Teach mode's tutor characters (components/guide/TutorCharacter.tsx; the drawings
+   are in lib/guide/avatarArt.ts). Every class and keyframe starts with tut-: the old
+   badge looks' av-* classes are still animated by index.css, and Tailwind owns names
+   like .shadow. Only transform and opacity ever move, nothing is filtered, and each
+   moving part turns on a pivot named in user units (transform-box: view-box), so a
+   part never drifts while its neighbours move.
+
+   3D since 2026-11-17 (the founder: "can you make them 3d? instead of a static 2d", then
+   "add more coloring to those character, make it more accurate on all edges"): every
+   filled part is a lit volume, a radial gradient from a highlight at its upper left
+   through its colour to a shadow at its lower right, edged with a crisp line in a deep
+   shade of its own colour; white parts take their shadow from the tutor's colour; the
+   eyes are glossy beads, the cheeks a soft blush, the shadow on the ground soft. The
+   gradients and the edge colours are worked out per tutor colour and written into each
+   copy's markup as fill and stroke attributes (avatarArt.ts tutorShades, shadeFigure,
+   shadingDefs; TutorCharacter.tsx), so this sheet never colours a filled part: a rule
+   here would outrank the attribute. And the figure turns a little in depth towards
+   where it glances (tut-turn, on a box of its own, in time with tut-look).
+
+   Light to run (2026-10-08). The compositor can't run an animation on a part inside an
+   SVG, so the old smooth loops in there repainted and re-layered the whole page on
+   every frame: 120-170 ms of main thread a second in the reader. So:
+     - the whole figure's moves (breathing, the talking bob, the arrival hops, the
+       shadow's squash, the listening lean) are on HTML boxes round the SVG, which the
+       compositor runs with no work for the page. Their distances are in % of the box,
+       so they scale with the character as the 64-box's units did (1 unit = 1.5625%);
+     - the small parts inside the SVG (blinks, glances, the mouth, the habits, flaps
+       and waves) step through a few held poses: steps(1) shows each keyframe as it is
+       until the next one, so the page repaints only when a pose changes - the mouth at
+       most 8 times a second, a blink twice - not 60 times a second;
+     - the sticker edge keeps still, but where its outline moves;
+     - nothing runs while the pointer is hidden, and while it flies only the mouth does.
+--------------------------------------------------------------------------- */
+.tut-char {
+  /* the rim round the figure on a dark page, and its shadow on the ground (the centre of a
+     soft gradient, TutorCharacter's) */
+  --tut-edge: rgba(255, 255, 255, 0.14);
+  --tut-ground: rgba(36, 22, 54, 0.34);
+  display: inline-block;
+  flex-shrink: 0;
+  line-height: 0;
+  vertical-align: middle;
+}
+.dark .tut-char {
+  --tut-edge: rgba(255, 255, 255, 0.14);
+  --tut-ground: rgba(0, 0, 0, 0.62);
+}
+.tut-char svg {
+  display: block;
+  overflow: visible;
+}
+/* The boxes round the drawing fill the character's box, so a % of theirs is a % of the 64-box. */
+.tut-char .tut-lean,
+.tut-char .tut-hop,
+.tut-char .tut-turn,
+.tut-char .tut-bob,
+.tut-char .tut-breathe {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.tut-char .tut-lean {
+  position: relative;
+  /* leans from its feet while it listens */
+  transform-origin: 50% 92%;
+  transition: transform 0.3s ease;
+}
+/* The shadow lies under the figure, beside the hop rather than in it, so it stays on the
+   ground; TutorCharacter puts its pivot on the shadow's centre. */
+.tut-char .tut-ground {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+/* The figure's own moves turn on its feet, (32, 60) in the 64-box. Each is on a box of
+   its own (arrival hop > talking bob > breathing), so one never restarts another; the
+   hop comes after the shadow, so it is drawn over it. No will-change: a running
+   transform animation is on the compositor anyway, and the hint would hold each box's
+   picture at the scale it was drawn at mid-move, so a figure that stops moving (the
+   dock's face once it has talked, as it doesn't breathe) would stay soft on a 100%
+   screen for the rest of the session. */
+.tut-char .tut-hop,
+.tut-char .tut-turn,
+.tut-char .tut-bob,
+.tut-char .tut-breathe {
+  transform-origin: 50% 93.75%;
+}
+/* the turn is seen from about three of the character's heights away (--tut-persp,
+   TutorCharacter's), so it turns as much at 24 px as at 96 */
+.tut-char .tut-hop { position: relative; perspective: var(--tut-persp, 150px); }
+/* At 28 px and below only the face shows (TutorCharacter crops the viewBox). */
+.tut-char[data-optical="xs"] .tut-breathe > svg { overflow: hidden; }
+.tut-char svg * { transform-box: view-box; }
+
+/* ---- paint: the edges' widths and the lines that are lines; a filled part's fill and edge
+   colour are attributes (see above). The hatching and the heavy weight line were a pen
+   drawing's shading: the gradients do that now. ---- */
+.tut-char .tut-k,
+.tut-char .tut-kt { stroke-linecap: round; stroke-linejoin: round; }
+.tut-char .tut-k { stroke-width: 1.2; }
+.tut-char .tut-kt { stroke-width: 0.9; }
+.tut-char .tut-kx,
+.tut-char .tut-kw { display: none; }
+.tut-char .tut-nf { fill: none; }
+/* limbs, Pip's crest and legs: a cord in a deep shade of the tutor's colour (--tut-limb);
+   Sprout's stem in the leaves' green */
+.tut-char .tut-k.tut-nf { stroke: var(--tut-limb); stroke-width: 2.4; }
+.tut-char .tut-k.tut-stem { stroke: #2f7d33; }
+/* fine lines: a closed eye, the spectacles, a brow, a smile, the spine's bands */
+.tut-char .tut-kt.tut-nf { stroke: #241a22; stroke-width: 1.45; }
+/* the catchlights, and the lenses: a glint of glass */
+.tut-char .tut-fh { fill: #ffffff; }
+.tut-char .tut-glass { fill: #ffffff; opacity: 0.35; }
+
+/* ---- drawn for its size: firmer edges and lines, bigger eyes, up to 56 px ---- */
+.tut-char:not([data-optical="md"]) .tut-k { stroke-width: 1.45; }
+.tut-char:not([data-optical="md"]) .tut-kt { stroke-width: 1.1; }
+.tut-char:not([data-optical="md"]) .tut-k.tut-nf { stroke-width: 2.9; }
+.tut-char:not([data-optical="md"]) .tut-kt.tut-nf { stroke-width: 1.85; }
+.tut-char:not([data-optical="md"]) .tut-bead { transform: scale(1.3); }
+.tut-char[data-optical="xs"] .tut-k { stroke-width: 1.8; }
+.tut-char[data-optical="xs"] .tut-bead { transform: scale(1.42); }
+
+/* ---- the rim: the figure again, underneath, as one line just outside its edge. On a light
+   page there is none (the edges and the shadow hold the figure); on a dark one a faint
+   light rim keeps its deep shades from sinking into the page. ---- */
+.tut-char .tut-edge { display: none; }
+.dark .tut-char .tut-edge { display: inline; }
+.tut-char .tut-edge * {
+  fill: none !important;
+  stroke: var(--tut-edge) !important;
+  stroke-width: 3 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+/* the inside of the figure never shows through, so its details need no edge */
+.tut-char .tut-edge .tut-look,
+.tut-char .tut-edge .tut-mouth,
+.tut-char .tut-edge .tut-jaw,
+.tut-char .tut-edge .tut-jaw-up,
+.tut-char .tut-edge .tut-specs,
+.tut-char .tut-edge .tut-kx,
+.tut-char .tut-edge .tut-fw,
+.tut-char .tut-edge .tut-fc,
+.tut-char .tut-edge .tut-fh { display: none; }
+.tut-char[data-optical="xs"] .tut-edge * { stroke-width: 3.6 !important; }
+/* The edge keeps still, but for the parts that move its outline, which step through the
+   same poses at the same moments as the figure's, so the paper always follows the ink:
+   Pip's tail and wings, Nib's tilt (it is the whole pencil), Bramble's quills (they are
+   its outline), Sprout's leaves, Comet's mane, Mochi's ear, and every wave. */
+.tut-char .tut-edge *:not(.tut-tail, .tut-wing-l, .tut-wing-r, .tut-tilt, .tut-quills, .tut-flutter-l, .tut-flutter-r, .tut-leaf-l, .tut-leaf-r, .tut-mane, .tut-ear, .tut-wave) {
+  animation: none !important;
+}
+
+/* ---- the rig: the parts inside the drawing ---- */
+.tut-char .tut-tilt { transform-origin: 32px 60px; }
+.tut-char .tut-mouth { transform: scaleY(0.32); }
+.tut-char .tut-lid { opacity: 0; }
+
+/* ---- idle: breathing, blinks (the open eye swaps for a closed lid), a look round, a habit ---- */
+.tut-char .tut-breathe { animation: tut-breathe 3.6s ease-in-out var(--tut-d, 0s) infinite; }
+.tut-char .tut-eyes { animation: tut-blink 7s steps(1) var(--tut-d, 0s) infinite; }
+.tut-char .tut-lid { animation: tut-lid 7s steps(1) var(--tut-d, 0s) infinite; }
+.tut-char .tut-look { animation: tut-look 12s steps(1) var(--tut-d, 0s) infinite; }
+/* the figure turns towards where it glances: the same 12 s and the same start as tut-look,
+   and it waits, stops and starts again whenever tut-look does, so the two never drift */
+.tut-char .tut-turn { animation: tut-turn 12s ease-in-out var(--tut-d, 0s) infinite; }
+.tut-char .tut-tail { animation: tut-tail 6.4s steps(1) var(--tut-d, 0s) infinite; }
+.tut-char .tut-tilt { animation: tut-tilt 8s steps(1) var(--tut-d, 0s) infinite; }
+.tut-char .tut-quills { animation: tut-ruffle 9s steps(1) var(--tut-d, 0s) infinite; }
+.tut-char .tut-specs { animation: tut-specs 8.5s steps(1) var(--tut-d, 0s) infinite; }
+/* both leaves sway together, as they always did (the right one's old "reverse" played the
+   same symmetric sway; with held poses it would put them a pose apart) */
+.tut-char .tut-leaf-l,
+.tut-char .tut-leaf-r { animation: tut-sway 3.6s steps(1) var(--tut-d, 0s) infinite; }
+/* Comet's mane sways as Sprout's leaves do, a little slower; Mochi's ear twitches as Pip's tail
+   flicks */
+.tut-char .tut-mane { animation: tut-sway 4.2s steps(1) var(--tut-d, 0s) infinite; }
+.tut-char .tut-ear { animation: tut-tail 7.4s steps(1) var(--tut-d, 0s) infinite; }
+/* The dock's 20 px face: just the blinks and the mouth (the rest would be a pixel's worth). */
+.tut-char[data-optical="xs"] .tut-breathe,
+.tut-char[data-optical="xs"] .tut-look,
+.tut-char[data-optical="xs"] .tut-turn,
+.tut-char[data-optical="xs"] .tut-tail,
+.tut-char[data-optical="xs"] .tut-tilt,
+.tut-char[data-optical="xs"] .tut-quills,
+.tut-char[data-optical="xs"] .tut-specs,
+.tut-char[data-optical="xs"] .tut-leaf-l,
+.tut-char[data-optical="xs"] .tut-leaf-r,
+.tut-char[data-optical="xs"] .tut-mane,
+.tut-char[data-optical="xs"] .tut-ear { animation: none; }
+
+/* ---- talking: uneven syllables and a bob (the breathing carries on underneath). The mouth,
+   the beak and the leaves change pose together, at the same moments, so the page repaints
+   at most 8 times a second for all of them. ---- */
+.tut-char[data-tut-mood="talking"] .tut-bob { animation: tut-talkbob 0.46s ease-in-out infinite alternate; }
+.tut-char[data-tut-mood="talking"] .tut-mouth { animation: tut-talk 0.92s steps(1) infinite; }
+.tut-char[data-tut-mood="talking"] .tut-jaw { animation: tut-jaw 0.92s steps(1) infinite; }
+.tut-char[data-tut-mood="talking"] .tut-jaw-up { animation: tut-jaw-up 0.92s steps(1) infinite; }
+.tut-char[data-tut-mood="talking"] .tut-flutter-l { animation: tut-flutter-l 0.92s steps(1) infinite; }
+.tut-char[data-tut-mood="talking"] .tut-flutter-r { animation: tut-flutter-r 0.92s steps(1) infinite; }
+
+/* ---- listening: leans in, blinks slower, looks down towards the mic's card ---- */
+.tut-char[data-tut-mood="listening"] > .tut-lean { transform: rotate(-6deg); }
+.tut-char[data-tut-mood="listening"] .tut-eyes,
+.tut-char[data-tut-mood="listening"] .tut-lid { animation-duration: 10s; }
+.tut-char[data-tut-mood="listening"] .tut-look { animation: none; transform: translate(1.2px, 0.9px); }
+.tut-char[data-tut-mood="listening"] .tut-turn { animation: none; transform: rotateY(10deg); }
+
+/* ---- thinking: looks up and away, breathing slower ---- */
+.tut-char[data-tut-mood="thinking"] .tut-look { animation: none; transform: translate(-1.3px, -1.1px); }
+.tut-char[data-tut-mood="thinking"] .tut-turn { animation: none; transform: rotateY(-10deg); }
+.tut-char[data-tut-mood="thinking"] .tut-breathe { animation-duration: 5.6s; }
+
+/* ---- arriving (GuidePointer sets data-pointing for a moment): each its own entrance ---- */
+.tut-char[data-pointing] .tut-ground { animation: tut-shadow-hop 0.66s cubic-bezier(0.3, 0.7, 0.4, 1) both; }
+.tut-char[data-pointing] .tut-look { animation: tut-glance 1.5s steps(1) both; }
+.tut-char[data-pointing] .tut-turn { animation: tut-turn-glance 1.5s ease-in-out both; }
+.tut-char[data-look="pip"][data-pointing] .tut-hop,
+.tut-char[data-look="sprout"][data-pointing] .tut-hop,
+.tut-char[data-look="comet"][data-pointing] .tut-hop { animation: tut-hop 0.66s cubic-bezier(0.3, 0.7, 0.4, 1) both; }
+.tut-char[data-look="bramble"][data-pointing] .tut-hop,
+.tut-char[data-look="mochi"][data-pointing] .tut-hop { animation: tut-hop-small 0.6s cubic-bezier(0.3, 0.7, 0.4, 1) both; }
+.tut-char[data-look="folio"][data-pointing] .tut-hop { animation: tut-hop-tilt 0.72s cubic-bezier(0.3, 0.8, 0.4, 1) both; }
+.tut-char[data-look="nib"][data-pointing] .tut-hop { animation: tut-dash 0.9s cubic-bezier(0.3, 0.8, 0.4, 1) both; }
+.tut-char[data-look="nib"][data-pointing] .tut-ground { animation: tut-shadow-dash 0.9s cubic-bezier(0.3, 0.8, 0.4, 1) both; }
+.tut-char[data-look="bramble"][data-pointing] .tut-quills { animation: tut-puff 0.75s steps(1) both; }
+.tut-char[data-look="pip"][data-pointing] .tut-wing-l { animation: tut-flap-l 0.62s steps(1) both; }
+.tut-char[data-look="pip"][data-pointing] .tut-wing-r { animation: tut-flap-r 0.62s steps(1) both; }
+.tut-char[data-look="sprout"][data-pointing] .tut-flutter-l { animation: tut-spring-l 0.8s steps(1) both; }
+.tut-char[data-look="sprout"][data-pointing] .tut-flutter-r { animation: tut-spring-r 0.8s steps(1) both; }
+.tut-char[data-look="comet"][data-pointing] .tut-mane { animation: tut-spring-l 0.8s steps(1) both; }
+.tut-char[data-look="mochi"][data-pointing] .tut-ear { animation: tut-spring-r 0.8s steps(1) both; }
+/* "wave": the move had no click of its own, so the character waves instead */
+.tut-char[data-pointing="wave"] .tut-wave { animation: tut-wave 1.25s steps(1) 0.12s both; }
+
+/* ---- the whole figure's moves (HTML boxes, run by the compositor; distances in % of the box) ---- */
+/* a turn to the side it looks to (tut-look: left from 32%, right from 47%, ahead from 60%) */
+@keyframes tut-turn {
+  0%, 28%, 63.5%, 100% { transform: rotateY(0deg); }
+  32%, 44.5% { transform: rotateY(-14deg); }
+  46.25% { transform: rotateY(0deg); }
+  49.5%, 59% { transform: rotateY(14deg); }
+}
+@keyframes tut-turn-glance { 0%, 100% { transform: rotateY(0deg); } 12%, 82% { transform: rotateY(-9deg); } }
+@keyframes tut-breathe { 0%, 100% { transform: scale(1, 1); } 45% { transform: scale(0.988, 1.026); } }
+@keyframes tut-talkbob { from { transform: translateY(0) scale(1, 1); } to { transform: translateY(-2.03125%) scale(0.985, 1.025); } }
+@keyframes tut-hop {
+  0% { transform: translateY(0) scale(1, 1); }
+  16% { transform: translateY(0.78125%) scale(1.07, 0.9); }
+  42% { transform: translateY(-10.9375%) scale(0.95, 1.07); }
+  68% { transform: translateY(0) scale(1.08, 0.9); }
+  84% { transform: translateY(0) scale(0.98, 1.03); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+@keyframes tut-hop-small {
+  0% { transform: translateY(0) scale(1, 1); }
+  18% { transform: translateY(0.625%) scale(1.05, 0.93); }
+  44% { transform: translateY(-6.25%) scale(0.97, 1.04); }
+  70% { transform: translateY(0) scale(1.05, 0.94); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+@keyframes tut-hop-tilt {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+  16% { transform: translate(0, 0.78125%) rotate(0deg) scale(1.07, 0.91); }
+  44% { transform: translate(0, -10.9375%) rotate(-9deg) scale(0.97, 1.04); }
+  70% { transform: translate(0, 0) rotate(4deg) scale(1.05, 0.95); }
+  86% { transform: translate(0, 0) rotate(-1.5deg) scale(1, 1); }
+  100% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+}
+/* Nib darts towards the arrow's tip, overshoots, and taps the page twice like a pencil. */
+@keyframes tut-dash {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+  22% { transform: translate(-5.46875%, -3.90625%) rotate(-11deg) scale(1.03, 0.97); }
+  40% { transform: translate(1.5625%, 0.9375%) rotate(3deg) scale(1, 1); }
+  54% { transform: translate(0, 0) rotate(-7deg) scale(1, 1); }
+  63% { transform: translate(0, 0.78125%) rotate(0deg) scale(1.02, 0.98); }
+  74% { transform: translate(0, 0) rotate(-6deg) scale(1, 1); }
+  84% { transform: translate(0, 0.625%) rotate(0deg) scale(1.02, 0.98); }
+  100% { transform: translate(0, 0) rotate(0deg) scale(1, 1); }
+}
+@keyframes tut-shadow-hop {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  42% { transform: scale(0.6); opacity: 0.5; }
+  68% { transform: scale(1.12); opacity: 1; }
+}
+@keyframes tut-shadow-dash {
+  0%, 100% { transform: translateX(0) scale(1, 1); }
+  22% { transform: translateX(-3.90625%) scale(1.06, 1); }
+  40% { transform: translateX(1.25%) scale(1, 1); }
+}
+
+/* ---- the parts inside the drawing: held poses (steps(1)), each kept until the next ---- */
+/* A blink every 7 s, and now and then two: the open eye swaps for the closed lid for
+   ~130 ms (a scaled bead is all but invisible at 48 px; a closed lid reads), then opens. */
+@keyframes tut-blink {
+  0%, 40.9%, 89.6%, 93.6%, 100% { opacity: 1; }
+  39%, 88%, 92% { opacity: 0; }
+}
+@keyframes tut-lid {
+  0%, 40.9%, 89.6%, 93.6%, 100% { opacity: 0; }
+  39%, 88%, 92% { opacity: 1; }
+}
+/* a look to one side, across (a beat in the middle), to the other side, and back */
+@keyframes tut-look {
+  0%, 45.5%, 60%, 100% { transform: translate(0, 0); }
+  32% { transform: translate(-1.4px, 0.2px); }
+  47% { transform: translate(1.4px, -0.3px); }
+}
+@keyframes tut-tail {
+  0%, 91%, 100% { transform: rotate(0deg); }
+  80% { transform: rotate(-9deg); }
+  82% { transform: rotate(-16deg); }
+  85.5% { transform: rotate(-4deg); }
+  87.5% { transform: rotate(5deg); }
+}
+@keyframes tut-tilt {
+  0%, 90%, 100% { transform: rotate(0deg); }
+  67% { transform: rotate(-2deg); }
+  70% { transform: rotate(-4deg); }
+  84% { transform: rotate(-1deg); }
+  86.5% { transform: rotate(1deg); }
+}
+@keyframes tut-ruffle {
+  0%, 89%, 100% { transform: scale(1, 1); }
+  81% { transform: scale(1.045, 1.035); }
+  83.5% { transform: scale(0.99, 0.99); }
+  86% { transform: scale(1.02, 1.02); }
+}
+@keyframes tut-specs {
+  0%, 75%, 100% { transform: translateY(0); }
+  59% { transform: translateY(-0.6px); }
+  60.5% { transform: translateY(-1.1px); }
+  73% { transform: translateY(-0.5px); }
+}
+@keyframes tut-sway {
+  0%, 100% { transform: rotate(0deg); }
+  25%, 75% { transform: rotate(1.75deg); }
+  50% { transform: rotate(3.5deg); }
+}
+
+/* Talking: seven syllable poses in 0.92 s (7.6 a second), the beak and the leaves on the
+   same beats as the mouth. */
+@keyframes tut-talk {
+  0%, 50%, 100% { transform: scaleY(0.3); }
+  12%, 80% { transform: scaleY(1); }
+  24% { transform: scaleY(0.5); }
+  38% { transform: scaleY(0.9); }
+  62% { transform: scaleY(0.72); }
+}
+@keyframes tut-jaw {
+  0%, 50%, 100% { transform: translateY(0); }
+  12%, 80% { transform: translateY(2.2px); }
+  24% { transform: translateY(0.8px); }
+  38%, 62% { transform: translateY(1.7px); }
+}
+@keyframes tut-jaw-up { 0%, 50%, 100% { transform: translateY(0); } 12%, 62% { transform: translateY(-0.6px); } }
+@keyframes tut-flutter-l { 0%, 100% { transform: rotate(0deg); } 24%, 80% { transform: rotate(2.5deg); } 50% { transform: rotate(5deg); } }
+@keyframes tut-flutter-r { 0%, 100% { transform: rotate(0deg); } 24%, 80% { transform: rotate(-2.5deg); } 50% { transform: rotate(-5deg); } }
+
+/* Arriving: a glance, a puff, two flaps, a spring of the leaves, a wave - a few poses each. */
+@keyframes tut-glance { 0%, 88%, 100% { transform: translate(0, 0); } 10% { transform: translate(-1.3px, -1px); } }
+@keyframes tut-puff {
+  0%, 86%, 100% { transform: scale(1, 1); }
+  12% { transform: scale(1.14, 1.12); }
+  40% { transform: scale(0.97, 0.98); }
+  64% { transform: scale(1.04, 1.03); }
+}
+@keyframes tut-flap-l {
+  0%, 88%, 100% { transform: rotate(0deg); }
+  14% { transform: rotate(38deg); }
+  42% { transform: rotate(8deg); }
+  66% { transform: rotate(32deg); }
+}
+@keyframes tut-flap-r {
+  0%, 88%, 100% { transform: rotate(0deg); }
+  14% { transform: rotate(-38deg); }
+  42% { transform: rotate(-8deg); }
+  66% { transform: rotate(-32deg); }
+}
+@keyframes tut-spring-l {
+  0%, 90%, 100% { transform: rotate(0deg); }
+  12% { transform: rotate(10deg); }
+  26% { transform: rotate(16deg); }
+  50% { transform: rotate(-5deg); }
+  72% { transform: rotate(4deg); }
+}
+@keyframes tut-spring-r {
+  0%, 90%, 100% { transform: rotate(0deg); }
+  12% { transform: rotate(-10deg); }
+  26% { transform: rotate(-16deg); }
+  50% { transform: rotate(5deg); }
+  72% { transform: rotate(-4deg); }
+}
+/* up halfway, up, a wiggle, back, a wiggle, down halfway, down */
+@keyframes tut-wave {
+  0%, 92%, 100% { transform: rotate(0deg); }
+  10%, 82% { transform: rotate(calc(var(--raise, -90deg) * 0.5)); }
+  20%, 49% { transform: rotate(var(--raise, -90deg)); }
+  31%, 67% { transform: rotate(calc(var(--raise, -90deg) + var(--wig, 24deg))); }
+}
+
+/* ---- reduced motion: calm. Slow blinks only, a gentle mouth so you can still see who is
+   talking, and a wave is a still raised hand; nothing hops, bobs, breathes or sways. ---- */
+@keyframes tut-talk-calm { 0%, 100% { transform: scaleY(0.32); } 25%, 75% { transform: scaleY(0.55); } 50% { transform: scaleY(0.75); } }
+@keyframes tut-jaw-calm { 0%, 100% { transform: translateY(0); } 25%, 75% { transform: translateY(0.7px); } 50% { transform: translateY(1.4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .tut-char .tut-breathe,
+  .tut-char .tut-look,
+  .tut-char .tut-turn,
+  .tut-char .tut-tail,
+  .tut-char .tut-tilt,
+  .tut-char .tut-quills,
+  .tut-char .tut-specs,
+  .tut-char .tut-leaf-l,
+  .tut-char .tut-leaf-r,
+  .tut-char .tut-mane,
+  .tut-char .tut-ear,
+  .tut-char .tut-flutter-l,
+  .tut-char .tut-flutter-r,
+  .tut-char .tut-bob,
+  .tut-char .tut-hop,
+  .tut-char .tut-ground,
+  .tut-char .tut-wing-l,
+  .tut-char .tut-wing-r,
+  .tut-char .tut-jaw-up,
+  .tut-char .tut-wave { animation: none !important; }
+  .tut-char .tut-eyes,
+  .tut-char .tut-lid { animation-duration: 10s; }
+  .tut-char[data-tut-mood="talking"] .tut-mouth { animation: tut-talk-calm 1.6s steps(1) infinite; }
+  .tut-char[data-tut-mood="talking"] .tut-jaw { animation: tut-jaw-calm 1.6s steps(1) infinite; }
+  .tut-char[data-pointing="wave"] .tut-wave { transform: rotate(var(--raise, -90deg)); }
+  .tut-char .tut-lean { transition: none; }
+}
+
+/* ---- unseen: nothing runs. GuidePointer fades the pointer out with Tailwind's opacity-0;
+   while it flies (data-flying on the pointer, set by Teach mode) only the mouth and the
+   figure's own moves go on: the glances and habits wait where they are, and so does the
+   blink, with the open eye held over it (paused mid-blink it could fly shut). Waiting,
+   not stopping, keeps the blink's place, so it carries on after landing: started afresh
+   at each landing it would come back to the same point every time, and a pointer that
+   moves every second or two would never blink. Its entrance on landing is never held,
+   even while the pointer's moves go on (data-pointing). Matched by attribute, as both
+   names are GuidePointer's and this sheet names only tut- classes. !important because
+   the moods' and arrivals' animation shorthands would set the play state back to
+   running, and only an important opacity outranks the one the blink sets. ---- */
+[class~="guide-cursor"][class~="opacity-0"] .tut-char,
+[class~="guide-cursor"][class~="opacity-0"] .tut-char * { animation-play-state: paused !important; }
+[class~="guide-cursor"][data-flying] .tut-char:not([data-pointing]) :is(.tut-look, .tut-turn, .tut-tail, .tut-tilt, .tut-quills, .tut-specs, .tut-leaf-l, .tut-leaf-r, .tut-mane, .tut-ear) {
+  animation-play-state: paused !important;
+}
+[class~="guide-cursor"][data-flying] .tut-char .tut-eyes { animation-play-state: paused !important; opacity: 1 !important; }
+[class~="guide-cursor"][data-flying] .tut-char .tut-lid { animation-play-state: paused !important; opacity: 0 !important; }
+
+/* src/components/auth/logoHang.css (web) */
+/* ---- the tutor hanging by one hand from the sign-in page's logo (components/auth/LogoHang.tsx)
+   The logo and what hangs from it share one box (.logo-hang-wrap), its own stacking context; the
+   tutor is in front of the picture, so its hand lies over the letter's edge.
+
+   Three boxes, all with no size, all turning round the same point, the hand's hold on the "e"
+   (LogoHang puts .logo-hang there): .logo-hang-sway, a slow sway that never stops, and
+   inside it .logo-hang-swing, the swings that die away (the swing in as the page opens, and a
+   push). Two boxes, so the two motions add up and neither ever restarts the other. Each swing is
+   a pendulum's: keyframes on its turning points only, each half swing eased as a sine (still at
+   the ends, fastest at the bottom), each one smaller than the one before by the same share. */
+.logo-hang-wrap {
+  position: relative;
+  isolation: isolate;
+  display: block;
+  width: fit-content;
+}
+.logo-hang {
+  position: absolute;
+  z-index: 1;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.logo-hang-sway,
+.logo-hang-swing {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+.logo-hang-figure {
+  position: absolute;
+  display: block;
+  line-height: 0;
+  pointer-events: auto;
+}
+/* In the air: no shadow on a ground. The waving limb is the holding one: raised (--hang-raise,
+   CHARACTER_ART's grip) and held still, with all in it. And nothing that moves the whole figure
+   (the breathing, the turn, the talking bob, the hops), which would slide the hand on the letter;
+   its blinks, glances and tail go on. */
+.logo-hang .tut-ground {
+  display: none;
+}
+.logo-hang .tut-wave {
+  transform: rotate(var(--hang-raise, -165deg)) !important;
+  animation: none !important;
+}
+.logo-hang .tut-wave * {
+  animation: none !important;
+}
+.logo-hang .tut-hop,
+.logo-hang .tut-turn,
+.logo-hang .tut-bob,
+.logo-hang .tut-breathe {
+  animation: none !important;
+}
+/* ...but pushed, it flaps its free wing (tutorCharacters.css's flap, as it lands on a word) */
+.logo-hang-figure.is-flapping .tut-wing-l {
+  animation: tut-flap-l 0.62s steps(1) both;
+}
+
+/* The sway: 1.6 degrees each way, a breath every 4.2 s. */
+.logo-hang-sway {
+  animation: logo-hang-sway 4.2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+@keyframes logo-hang-sway {
+  0%,
+  100% {
+    transform: rotate(-1.6deg);
+  }
+  50% {
+    transform: rotate(1.6deg);
+  }
+}
+
+/* The swing in: let go 18 degrees out to the right, in the open beside the "e", and it fades
+   in as it falls. A swing takes 1.15 s and each turning point is e^(-0.575 / 0.9) = 0.53 of
+   the one before: -18, 9.5, -5, 2.65, -1.4, then through the bottom at 2.6 s. */
+.logo-hang-swing {
+  animation:
+    logo-hang-in 2.6s cubic-bezier(0.37, 0, 0.63, 1) 0.3s both,
+    logo-hang-show 0.4s ease-out 0.3s both;
+}
+@keyframes logo-hang-in {
+  0% {
+    transform: rotate(-18deg);
+  }
+  22.12% {
+    transform: rotate(9.5deg);
+  }
+  44.23% {
+    transform: rotate(-5deg);
+  }
+  66.35% {
+    transform: rotate(2.65deg);
+  }
+  88.46% {
+    transform: rotate(-1.4deg);
+    animation-timing-function: cubic-bezier(0.12, 0, 0.39, 0);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+@keyframes logo-hang-show {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* A push: from the bottom, away from the side it came from (--hang-push: -1 to the right, 1 to
+   the left), the same swing and the same dying away, its turning points at a quarter, three
+   quarters... of each 1.15 s swing: 11.6, -6.1, 3.2, -1.7 degrees. Out to each turning point it
+   slows (a sine's end), back from it it gathers speed (a sine's start). */
+.logo-hang-swing.is-pushed {
+  animation: logo-hang-push 2.3s both;
+}
+@keyframes logo-hang-push {
+  0%,
+  25%,
+  50%,
+  75% {
+    transform: rotate(0deg);
+    animation-timing-function: cubic-bezier(0.61, 1, 0.88, 1);
+  }
+  12.5% {
+    transform: rotate(calc(var(--hang-push, 1) * 11.6deg));
+    animation-timing-function: cubic-bezier(0.12, 0, 0.39, 0);
+  }
+  37.5% {
+    transform: rotate(calc(var(--hang-push, 1) * -6.1deg));
+    animation-timing-function: cubic-bezier(0.12, 0, 0.39, 0);
+  }
+  62.5% {
+    transform: rotate(calc(var(--hang-push, 1) * 3.2deg));
+    animation-timing-function: cubic-bezier(0.12, 0, 0.39, 0);
+  }
+  87.5% {
+    transform: rotate(calc(var(--hang-push, 1) * -1.7deg));
+    animation-timing-function: cubic-bezier(0.12, 0, 0.39, 0);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+/* Reduced motion: it hangs still, straight down. */
+@media (prefers-reduced-motion: reduce) {
+  .logo-hang-sway,
+  .logo-hang-swing,
+  .logo-hang-swing.is-pushed {
+    animation: none !important;
+    transform: none;
+    opacity: 1;
+  }
+}
+      /* sign-in-tutor:end */
     </style>
   </head>
   <body>
@@ -165,7 +794,31 @@
         <div class="leaves" id="leaves" aria-hidden="true"></div>
 
         <main class="form-col" id="form-col">
-          <img class="logo" src="tutornote-wordmark.png" alt="Tutornote" />
+          <!-- sign-in-tutor:start -->
+          <span class="logo-hang-wrap logo-wrap"><img class="logo" src="tutornote-wordmark.png" alt="Tutornote" /><span aria-hidden="true" class="logo-hang" style="left:95.1%;top:calc(98.11% - 1.5px)"><span class="logo-hang-sway"><span class="logo-hang-swing"><span class="logo-hang-figure" style="left:-26.16px;top:-12.79px;transform-origin:26.16px 12.79px;transform:rotate(-14deg);--hang-raise:-165deg"><span class="guide-avatar tut-char" data-look="pip" data-tut-mood="idle" data-optical="sm" style="width:38px;height:38px;--tut-limb:#293466;--tut-persp:114px;--tut-d:-6.482s"><span class="tut-lean"><svg class="tut-ground" viewBox="0 0 64 64" width="100%" height="100%" aria-hidden="true" focusable="false" style="transform-origin:50% 91.25%"><ellipse class="tut-shadow" cx="32" cy="58.4" rx="12" ry="2" fill="url(#tut3f84eeR1-gr)"></ellipse></svg><span class="tut-hop"><span class="tut-turn"><span class="tut-bob"><span class="tut-breathe"><svg viewBox="0 0 64 64" width="100%" height="100%" aria-hidden="true" focusable="false"><defs><radialGradient id="tut3f84eeR1-fm" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#a0c3fa"/><stop offset="0.42" stop-color="#3f84ee"/><stop offset="0.88" stop-color="#324e92"/><stop offset="1" stop-color="#324e92"/></radialGradient><radialGradient id="tut3f84eeR1-fs" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#dee8f8"/><stop offset="0.42" stop-color="#bdd2f1"/><stop offset="0.88" stop-color="#717794"/><stop offset="1" stop-color="#717794"/></radialGradient><radialGradient id="tut3f84eeR1-fd" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#97afda"/><stop offset="0.42" stop-color="#3760b0"/><stop offset="0.88" stop-color="#2c3b71"/><stop offset="1" stop-color="#2c3b71"/></radialGradient><radialGradient id="tut3f84eeR1-fi" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#635b6c"/><stop offset="0.42" stop-color="#1c141e"/><stop offset="0.88" stop-color="#050306"/><stop offset="1" stop-color="#050306"/></radialGradient><radialGradient id="tut3f84eeR1-beak" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#fdd5a1"/><stop offset="0.42" stop-color="#f8a91f"/><stop offset="0.88" stop-color="#8f6339"/><stop offset="1" stop-color="#8f6339"/></radialGradient><radialGradient id="tut3f84eeR1-fw"><stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient><radialGradient id="tut3f84eeR1-fc"><stop offset="0" stop-color="#ff5f7e" stop-opacity="0.8"/><stop offset="1" stop-color="#ff5f7e" stop-opacity="0"/></radialGradient><radialGradient id="tut3f84eeR1-gr"><stop offset="0" style="stop-color:var(--tut-ground)"/><stop offset="0.55" style="stop-color:var(--tut-ground);stop-opacity:0.5"/><stop offset="1" style="stop-color:var(--tut-ground);stop-opacity:0"/></radialGradient></defs><g class="tut-edge"><g class="tut-tail" style="transform-origin:17px 41px"><path class="tut-fd tut-k" d="M17.6 43.4C13.8 45.6 10.4 45 8.4 42.4C11 42 12.6 40.8 13.8 38.6C15.2 40.2 16.4 41.6 17.6 43.4Z"/></g><path class="tut-k tut-nf" d="M27.8 50.6L27.2 56.4M24.6 57.4L27.2 56.4L29.6 57.6M36.2 50.6L36.8 56.4M34.4 57.6L36.8 56.4L39.4 57.4"/><path class="tut-k tut-nf" d="M31.2 19.2C30.2 16.2 30.8 13.8 33 12.8M33.8 18.9C34.6 16.6 36.6 15.4 38.8 16"/><path class="tut-fm tut-k" d="M32.4 18.6C41.8 18.4 49.4 25.8 49.1 35.4C48.8 45 41.4 51.8 31.8 51.6C22.4 51.4 15 44.4 15.1 35.2C15.2 25.6 22.8 18.8 32.4 18.6Z"/><path class="tut-fw" d="M20.4 30.8C21.4 25.4 26 21.8 31 21.4C27.4 23.8 24.8 27 24 31.2C22.8 32.2 21.2 32.2 20.4 30.8Z"/><path class="tut-fs tut-kt" d="M32 31.4C38.8 31.2 43.6 36.6 42.8 42.8C42 48 37.6 50.8 32 50.8C26.4 50.8 22 48 21.2 42.8C20.4 36.6 25.2 31.6 32 31.4Z"/><path class="tut-kx" d="M32.6 41.4l1.3 1.2 1.3-1.2M35.8 44.6l1.2 1.1 1.2-1.1M30.6 45.8l1.2 1.1 1.2-1.1"/><path class="tut-kw" d="M47.8 41.2C45.6 47 39.6 51.4 32.4 51.6"/><path class="tut-kx" d="M38.6 20.2C43.4 21.8 47 25.6 48.4 30.4"/><ellipse class="tut-fc" cx="22.2" cy="35.4" rx="2.6" ry="1.6"/><ellipse class="tut-fc" cx="41.8" cy="35.4" rx="2.6" ry="1.6"/><g class="tut-look"><g class="tut-bead" style="transform-origin:26px 29.6px"><g class="tut-eyes" style="transform-origin:26px 29.6px"><ellipse class="tut-fi" cx="26" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="26.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M23.3 29.5Q26 31.5 28.7 29.5"/></g><g class="tut-bead" style="transform-origin:38px 29.6px"><g class="tut-eyes" style="transform-origin:38px 29.6px"><ellipse class="tut-fi" cx="38" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="38.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M35.3 29.5Q38 31.5 40.7 29.5"/></g></g><ellipse class="tut-fi" cx="32" cy="35.2" rx="2.2" ry="2.2"/><path class="tut-jaw tut-beak tut-kt" d="M29.4 35L32 35.8L34.6 35Q33.6 38.2 32 38.6Q30.4 38.2 29.4 35Z"/><path class="tut-jaw-up tut-beak tut-kt" d="M28.2 33.4Q32 31.4 35.8 33.4Q34 35.6 32 36Q30 35.6 28.2 33.4Z"/><g class="tut-wing-l" style="transform-origin:18.4px 33.4px"><path class="tut-fd tut-k" d="M18.2 33C13.4 34.6 11.4 40 13.4 44.8C17 44.6 19.8 40.8 19.8 36.6C19.8 35.2 19.2 33.8 18.2 33Z"/></g><g class="tut-wave" style="transform-origin:45.8px 33.6px;--raise:-95deg;--wig:24deg"><g class="tut-wing-r" style="transform-origin:45.8px 33.6px"><path class="tut-fd tut-k" d="M45.8 33C50.6 34.6 52.6 40 50.6 44.8C47 44.6 44.2 40.8 44.2 36.6C44.2 35.2 44.8 33.8 45.8 33Z"/><path class="tut-kx" d="M47.2 38.2q1.8 1.6 1.6 4"/></g></g></g><g><g class="tut-tail" style="transform-origin:17px 41px"><path class="tut-fd tut-k" fill="url(#tut3f84eeR1-fd) #3760b0" stroke="#293466" d="M17.6 43.4C13.8 45.6 10.4 45 8.4 42.4C11 42 12.6 40.8 13.8 38.6C15.2 40.2 16.4 41.6 17.6 43.4Z"/></g><path class="tut-k tut-nf" d="M27.8 50.6L27.2 56.4M24.6 57.4L27.2 56.4L29.6 57.6M36.2 50.6L36.8 56.4M34.4 57.6L36.8 56.4L39.4 57.4"/><path class="tut-k tut-nf" d="M31.2 19.2C30.2 16.2 30.8 13.8 33 12.8M33.8 18.9C34.6 16.6 36.6 15.4 38.8 16"/><path class="tut-fm tut-k" fill="url(#tut3f84eeR1-fm) #3f84ee" stroke="#2f4481" d="M32.4 18.6C41.8 18.4 49.4 25.8 49.1 35.4C48.8 45 41.4 51.8 31.8 51.6C22.4 51.4 15 44.4 15.1 35.2C15.2 25.6 22.8 18.8 32.4 18.6Z"/><path class="tut-fw" fill="url(#tut3f84eeR1-fw)" d="M20.4 30.8C21.4 25.4 26 21.8 31 21.4C27.4 23.8 24.8 27 24 31.2C22.8 32.2 21.2 32.2 20.4 30.8Z"/><path class="tut-fs tut-kt" fill="url(#tut3f84eeR1-fs) #bdd2f1" stroke="#636783" d="M32 31.4C38.8 31.2 43.6 36.6 42.8 42.8C42 48 37.6 50.8 32 50.8C26.4 50.8 22 48 21.2 42.8C20.4 36.6 25.2 31.6 32 31.4Z"/><path class="tut-kx" d="M32.6 41.4l1.3 1.2 1.3-1.2M35.8 44.6l1.2 1.1 1.2-1.1M30.6 45.8l1.2 1.1 1.2-1.1"/><path class="tut-kw" d="M47.8 41.2C45.6 47 39.6 51.4 32.4 51.6"/><path class="tut-kx" d="M38.6 20.2C43.4 21.8 47 25.6 48.4 30.4"/><ellipse class="tut-fc" fill="url(#tut3f84eeR1-fc)" cx="22.2" cy="35.4" rx="2.6" ry="1.6"/><ellipse class="tut-fc" fill="url(#tut3f84eeR1-fc)" cx="41.8" cy="35.4" rx="2.6" ry="1.6"/><g class="tut-look"><g class="tut-bead" style="transform-origin:26px 29.6px"><g class="tut-eyes" style="transform-origin:26px 29.6px"><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="26" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="26.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M23.3 29.5Q26 31.5 28.7 29.5"/></g><g class="tut-bead" style="transform-origin:38px 29.6px"><g class="tut-eyes" style="transform-origin:38px 29.6px"><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="38" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="38.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M35.3 29.5Q38 31.5 40.7 29.5"/></g></g><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="32" cy="35.2" rx="2.2" ry="2.2"/><path class="tut-jaw tut-beak tut-kt" fill="url(#tut3f84eeR1-beak) #f8a91f" stroke="#7c5738" d="M29.4 35L32 35.8L34.6 35Q33.6 38.2 32 38.6Q30.4 38.2 29.4 35Z"/><path class="tut-jaw-up tut-beak tut-kt" fill="url(#tut3f84eeR1-beak) #f8a91f" stroke="#7c5738" d="M28.2 33.4Q32 31.4 35.8 33.4Q34 35.6 32 36Q30 35.6 28.2 33.4Z"/><g class="tut-wing-l" style="transform-origin:18.4px 33.4px"><path class="tut-fd tut-k" fill="url(#tut3f84eeR1-fd) #3760b0" stroke="#293466" d="M18.2 33C13.4 34.6 11.4 40 13.4 44.8C17 44.6 19.8 40.8 19.8 36.6C19.8 35.2 19.2 33.8 18.2 33Z"/></g><g class="tut-wave" style="transform-origin:45.8px 33.6px;--raise:-95deg;--wig:24deg"><g class="tut-wing-r" style="transform-origin:45.8px 33.6px"><path class="tut-fd tut-k" fill="url(#tut3f84eeR1-fd) #3760b0" stroke="#293466" d="M45.8 33C50.6 34.6 52.6 40 50.6 44.8C47 44.6 44.2 40.8 44.2 36.6C44.2 35.2 44.8 33.8 45.8 33Z"/><path class="tut-kx" d="M47.2 38.2q1.8 1.6 1.6 4"/></g></g></g></svg></span></span></span></span></span></span></span></span></span></span></span>
+          <script>
+(function () {
+  var swing = document.querySelector(".logo-hang-swing");
+  var figure = document.querySelector(".logo-hang-figure");
+  if (!swing || !figure) return;
+  var readyAt = performance.now() + 2900;
+  function push(e) {
+    var now = performance.now();
+    if (now < readyAt) return;
+    readyAt = now + 2300;
+    var box = figure.getBoundingClientRect();
+    swing.style.setProperty("--hang-push", e.clientX < box.left + box.width / 2 ? "-1" : "1");
+    [[swing, "is-pushed"], [figure, "is-flapping"]].forEach(function (p) {
+      p[0].classList.remove(p[1]);
+      void p[0].offsetWidth;
+      p[0].classList.add(p[1]);
+    });
+  }
+  figure.addEventListener("pointerenter", push);
+  figure.addEventListener("pointerdown", push);
+})();
+          </script>
+          <!-- sign-in-tutor:end -->
           <h1>Welcome back to <br />Tutornote</h1>
           <p class="beta">Tutornote is currently in beta.</p>
 
