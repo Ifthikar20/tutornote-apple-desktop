@@ -94,4 +94,6 @@ say "copying the bundle into renderer/"
 rm -rf "$OUT"
 cp -R "$WEB_DIR/dist" "$OUT"
 printf '%s %s\n' "$LABEL" "$(date -u +%Y-%m-%dT%H:%MZ)" > "$OUT/BUILD"
+# The sign-in screen's hanging tutor, drawn from the same checkout's LogoHang (static/signin.html).
+node "$ROOT/scripts/sign-in-tutor.mjs" "$WEB_DIR"
 say "renderer/ is $(cat "$OUT/BUILD") ($(du -sh "$OUT" | cut -f1))"

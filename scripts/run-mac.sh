@@ -92,7 +92,7 @@ esac
 
 # 7. Build, then run in the foreground: the app prints its own and the web app's console
 #    output here. ELECTRON_ENABLE_LOGGING=1 in the environment adds Chromium's own.
-say "app URL: ${ANOTHERNOTES_URL:-https://tutornote.ai/dashboard (default)}"
+say "app URL: ${ANOTHERNOTES_URL:-https://app.tutornote.ai/dashboard (default)}"
 case "$MODE" in
   dev)
     say "building from source and starting Electron"
