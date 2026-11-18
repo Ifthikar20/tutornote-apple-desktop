@@ -309,6 +309,9 @@ const screenTeachBridge = Object.freeze({
   /** Circle to explain: the mouse up after a drag, the companion on (with its stroke). `ring`
    *  false: a selection drag rather than a ring, with where it was pressed (`fx`, `fy`). */
   onLift: (cb: unknown): (() => void) => listen("screen-teach:lift", cb),
+  /** The mouse came up, anywhere (after the release or the lift it ends): a stroke begun at the
+   *  press stops there, so the cursor moving on draws nothing. */
+  onUp: (cb: unknown): (() => void) => listen("screen-teach:up", cb),
   /** A careful read of a circled window (null: none to be had). */
   circleRead: (req: unknown): Promise<unknown> => ipcRenderer.invoke("screen-teach:circle-read", req),
   /** A picture of a circled rectangle (null: none to be had). */
