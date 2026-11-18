@@ -332,6 +332,26 @@ const screenTeachBridge = Object.freeze({
   onTapDropped: (cb: unknown): (() => void) => listen("screen-teach:tap-dropped", cb),
 });
 
+/** The web app's "theme" setting (public/theme-boot.js reads it as a page loads), or null. */
+function themeSetting(): string | null {
+  try {
+    const value = localStorage.getItem("theme");
+    return typeof value === "string" ? value.slice(0, 16) : null;
+  } catch {
+    return null;
+  }
+}
+
+/* Another window changed the theme or the student's tutor (the web app keeps both in this origin's
+   storage, and a page hears another window's change as a storage event): the main process reads
+   the cursor's tutor off its page again, so the floating blob keeps to it (src/main/blobTutor.ts).
+   Only the theme setting goes with it. */
+window.addEventListener("storage", (event) => {
+  if (event.key === "theme" || event.key === "an-guide-mentors" || event.key === "an-guide-voice3") {
+    ipcRenderer.send("companion:recheck", { theme: themeSetting() });
+  }
+});
+
 contextBridge.exposeInMainWorld(
   "anothernotes",
   Object.freeze({
@@ -339,6 +359,19 @@ contextBridge.exposeInMainWorld(
     version: versionArg ? versionArg.slice(VERSION_FLAG.length) : "",
     ...(nativeSpeech ? { speech: speechBridge } : {}),
     ...(screenTeach ? { screenTeach: screenTeachBridge } : {}),
+    /** The tutor that follows the cursor (the web app's lib/guide/avatars.ts tellDesktop: the
+     *  student's main tutor, its look and its colour), said as a page loads and when the student
+     *  picks another: the floating blob rests as the same tutor (src/main/blobTutor.ts). Only two
+     *  short strings go, with the app's theme setting; the main process checks them, and takes
+     *  them only from the app's own pages. */
+    tutorLook: (value: unknown): void => {
+      const v = (typeof value === "object" && value !== null ? value : {}) as { look?: unknown; base?: unknown };
+      ipcRenderer.send("companion:tutor-look", {
+        look: typeof v.look === "string" ? v.look.slice(0, 16) : "",
+        base: typeof v.base === "string" ? v.base.slice(0, 7) : "",
+        theme: themeSetting(),
+      });
+    },
     auth: Object.freeze({
       /** Sign in with an email and password; on success the window moves to the dashboard. */
       signIn: (form: { email: string; password: string }): Promise<unknown> =>

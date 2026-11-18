@@ -105,6 +105,10 @@ jobs:
           git -C .web branch -r --contains "$WEB_REF" | grep -q 'origin/feature/october' || { echo "::error::WEB_REF $WEB_REF is not on tutornote-web's feature/october"; exit 1; }
           cp .web/.env.off.example .web/.env.off
           TUTORNOTE_WEB_DIR=.web TUTORNOTE_WEB_REF="$WEB_REF" TUTORNOTE_WEB_BUILD_DIR="$RUNNER_TEMP/web" node scripts/build-renderer.mjs
+          # The static pages are drawn from WEB_REF too (scripts/static-tutors.mjs: the floating blob's
+          # tutors, the sign-in screen's), and the package job takes static/ from git: they must
+          # already be the ones drawn from WEB_REF, or the app ships another tutor than the cursor's.
+          git diff --exit-code --stat -- static/ || { echo "::error::static/ is not drawn from WEB_REF $WEB_REF: run TUTORNOTE_WEB_REF=$WEB_REF npm run renderer, commit and push static/, then tag that commit"; exit 1; }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

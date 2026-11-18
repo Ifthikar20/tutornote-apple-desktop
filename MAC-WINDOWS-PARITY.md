@@ -234,10 +234,17 @@ New files must be added before `git commit -- <paths>` will take them: `git add 
 
 The test suite (`Tutornote_test_suite`) also changed: `apple-desktop/release.test.ts` (new), `apple-desktop/sessionHandOff.test.ts` (title), and `CATALOG.md`. Regenerating CATALOG.md also picked up unrelated drift (42 insertions, 12 deletions). Review it before committing the suite.
 
+### 3.9 The floating tutor is the cursor's tutor (Mac 2026-11-17, Windows not yet)
+
+**Mac:** the blob drew a hand-made flat Sprout while the cursor showed the student's own tutor in 3D (web `useMainAvatar`, since web b5b00b2). The preload now gives the web app the `window.anothernotes.tutorLook({look, base})` it already calls (web c1d4df1). `src/main/blobTutor.ts` takes it from the app's own pages, reads the cursor's tutor off the lesson page as the blob shows, and checks both against the 14 tutors in `src/main/tutorLook.ts`. `scripts/static-tutors.mjs` (it replaces `scripts/sign-in-tutor.mjs`) draws all 14 into `static/blob.html` from the bundled web commit, and checks the web's `AVATARS` against `TUTOR_LOOKS`. Tests: suite `apple-desktop/tutorLook.test.ts` and `apple-desktop/staticTutors.test.ts`, both in `npm test`.
+**Windows:** its blob is still the ring and the pixel sky, and it has no `tutorLook`. Port `tutorLook.ts`, `blobTutor.ts`, the preload member and `static-tutors.mjs` (with a cache folder for Windows, as build-renderer.mjs has), then list them in `MAC_BASE`.
+
+`npm run renderer` (and a release) now redraws the tutors in `static/blob.html` and `static/signin.html` from the web commit it builds. The pages do not record that commit, so they change only when the web's tutors or their stylesheet changed. After setting `WEB_REF`, run `TUTORNOTE_WEB_REF=$WEB_SHA npm run renderer`; if `static/` changed, commit and push it, then tag that commit. `scripts/release.mjs` stops when the drawing changed a page, and mac.yml fails the build when `static/` is not the drawing from `WEB_REF`, because the package job ships `static/` as git holds it.
+
 ## 4. Release: Mac 1.0.1 with the same web
 
 1. Deploy tutornote-web and check that it is live. The Windows 1.0.1 build waits for this too.
-2. Set `WEB_REF` to that sha (3.4).
+2. Set `WEB_REF` to that sha (3.4). Draw the static pages from it (`TUTORNOTE_WEB_REF=$WEB_SHA npm run renderer`), and commit and push `static/` if that changed it (3.9).
 3. Get a clean compile, a passing `--selftest` and the live test on a Mac (3.1, 3.2).
 4. Confirm the secrets (3.3).
 5. Do a local dry run on the Mac:

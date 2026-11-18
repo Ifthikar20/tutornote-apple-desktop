@@ -26,6 +26,7 @@ import {
   type Lift,
   type Point,
 } from "./companionPlace";
+import { blobTutorName, blobTutorState, installBlobTutor, refreshBlobTutor } from "./blobTutor";
 import { overlayArea } from "./boardHost";
 import { titleChange } from "./docIdentity";
 import { appEvents } from "./events";
@@ -82,7 +83,7 @@ import { getMainWindow } from "./windows";
 /*
   The desktop companion: Tutornote's tutor over any app ("Teach mode over any app").
 
-  A blob lives on the desktop (static/blob.html: Sprout, in a 64 point window of its own that floats over every
+  A blob lives on the desktop (static/blob.html: the student's tutor, the one the cursor gets (blobTutor.ts), in a 64 point window of its own that floats over every
   app and every Space and never takes the keys). Click it, or press ⌃⌥E in any app, and the tutor
   hops out and trails the cursor over whatever is under it: a Kindle book, Kortext, a PDF in
   Chrome. It is drawn by the lesson's own see-through window (screenTeach.ts companion mode, the web
@@ -328,9 +329,11 @@ function tellBlob(extra: { pop?: boolean } = {}, look: BlobLook = blobLook()): v
         : look === "blocked" && blockedBy === "unavailable"
           ? LABELS.unavailable
           : LABELS[look];
-  const send = (): void => b.webContents.send("blob:state", { look, label, side: labelSide, ...extra });
+  const send = (): void => b.webContents.send("blob:state", { look, label, side: labelSide, ...blobTutorState(), ...extra });
   if (b.webContents.isLoading()) b.webContents.once("did-finish-load", send);
   else send();
+  // (shown, or landing home: the cursor's tutor, and whether it is drawn dark, read off its page again)
+  if (extra.pop) void refreshBlobTutor();
 }
 
 /**
@@ -737,7 +740,7 @@ function showMenu(): void {
   endDrag(false);
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(on ? [{ label: "Turn off", click: () => turnOff() }] : []),
-    { label: "Close Sprout", click: () => hideBlob() },
+    { label: `Close ${blobTutorName()}`, click: () => hideBlob() },
   ];
   Menu.buildFromTemplate(template).popup({ window: b });
 }
@@ -1974,7 +1977,9 @@ export function installCompanion(): void {
   }
 
   ipcMain.on("blob:ready", (event) => {
-    if (fromBlob(event)) tellBlob();
+    if (!fromBlob(event)) return;
+    tellBlob();
+    void refreshBlobTutor();
   });
   ipcMain.on("blob:drag-start", (event) => {
     if (fromBlob(event)) startDrag();
@@ -1991,6 +1996,8 @@ export function installCompanion(): void {
   ipcMain.on("blob:hover", (event, hover: unknown) => {
     if (fromBlob(event) && typeof hover === "boolean") onHover(hover);
   });
+  // Which tutor rests in the blob: the one on the cursor, as the app's pages say (blobTutor.ts).
+  installBlobTutor(() => tellBlob());
 
   // From the lesson's page (screenTeach.ts companion mode): the card's pick, the card closed, and
   // the cursor fed from here while the page hears no mouse moves of its own.

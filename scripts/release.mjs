@@ -22,7 +22,9 @@
        TUTORNOTE_WEB_REF names a commit of tutornote-web that is on origin/feature/october, so only
        pushed web code goes into an app; signed or unsigned.
     2. npm run typecheck, npm test.
-    3. The web app's bundle from that commit (scripts/build-renderer.mjs), into renderer/.
+    3. The web app's bundle from that commit (scripts/build-renderer.mjs), into renderer/, and the
+       tutors on the static pages drawn from it (scripts/static-tutors.mjs): a page that changed
+       stops the release until it is committed.
     4. npm run dist:mac: the universal .dmg, the .zip the updater takes and latest-mac.yml, in the
        release folder (~/Library/Caches/tutornote-build/release, or TUTORNOTE_RELEASE_DIR; outside
        iCloud).
@@ -456,6 +458,11 @@ function main() {
     run(process.execPath, [path.join(root, "scripts", "build-renderer.mjs")], {
       env: { ...process.env, TUTORNOTE_WEB_REF: webSha, TUTORNOTE_WEB_DIR: webDir },
     });
+    // The static pages are drawn from that commit too (scripts/static-tutors.mjs: the floating
+    // blob's tutors, the sign-in screen's), and CI packages static/ as git holds it: pages the
+    // drawing changed are committed first, so this release and CI's ship the same screens.
+    const redrawn = git(root, "status", "--porcelain", "--", "static");
+    if (redrawn) stop(`the web app's bundle redrew static pages from ${webShort}; commit them, then release again:\n${redrawn}`);
   }
   // renderer/BUILD starts with the commit's short id (scripts/build-renderer.mjs). Its length is
   // git's choice on the day it was written, so it is matched as the start of the full id.

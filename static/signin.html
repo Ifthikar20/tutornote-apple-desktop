@@ -161,7 +161,7 @@
       /* The tutor hanging from the logo by one hand, as on the website's sign-in page (the web app's
          components/auth/LogoHang.tsx; the founder, 2026-11-17). Room under the logo for it, and
          smaller with the logo in a shorter window, round the point its hand holds. Its own
-         stylesheets go between the markers, written by scripts/sign-in-tutor.mjs from the web app. */
+         stylesheets go between the markers, written by scripts/static-tutors.mjs from the web app. */
       .logo-wrap { margin: 0 0 40px; }
       .logo-wrap .logo { margin: 0; }
       @media (max-height: 880px) { .logo-wrap { margin-bottom: 34px; } .logo-wrap .logo-hang { transform: scale(.86); transform-origin: 0 0; } }
@@ -595,7 +595,11 @@
   .tut-char .tut-wing-l,
   .tut-char .tut-wing-r,
   .tut-char .tut-jaw-up,
-  .tut-char .tut-wave { animation: none !important; }
+  .tut-char .tut-wave,
+  .tut-char .tut-tear,
+  .tut-char .tut-sweat,
+  .tut-char .tut-confetti { animation: none !important; }
+  .tut-char .tut-fx { display: none; }
   .tut-char .tut-eyes,
   .tut-char .tut-lid { animation-duration: 10s; }
   .tut-char[data-tut-mood="talking"] .tut-mouth { animation: tut-talk-calm 1.6s steps(1) infinite; }
@@ -622,6 +626,391 @@
 }
 [class~="guide-cursor"][data-flying] .tut-char .tut-eyes { animation-play-state: paused !important; opacity: 1 !important; }
 [class~="guide-cursor"][data-flying] .tut-char .tut-lid { animation-play-state: paused !important; opacity: 0 !important; }
+
+/* ---- the sleepy moods (lib/guide/idleRest.ts WAKE_MOODS): the tutor popping out of Tutor me
+   before the lesson's first word (one a day), and resting on the bench (IdleBench). The closed
+   lid stands in for the open eye; each mood has a habit of its own. The whole figure's moves
+   are on .tut-bob (free while it isn't talking), in % of the box, round its feet; the parts
+   inside step through held poses, as every other mood's do. ---- */
+.tut-char:is([data-tut-mood="sleepy"], [data-tut-mood="dreamy"], [data-tut-mood="yawn"]) .tut-eyes { animation: none; opacity: 0; }
+.tut-char:is([data-tut-mood="sleepy"], [data-tut-mood="dreamy"], [data-tut-mood="yawn"]) .tut-lid { animation: none; opacity: 1; }
+.tut-char:is([data-tut-mood="sleepy"], [data-tut-mood="dreamy"]) .tut-breathe { animation-duration: 6.4s; }
+.tut-char:is([data-tut-mood="sleepy"], [data-tut-mood="dreamy"]) .tut-look { animation: none; transform: translate(0, 0.8px); }
+/* sleepy: the head sinks slowly to one side and comes back */
+.tut-char[data-tut-mood="sleepy"] .tut-bob { animation: tut-doze 6.4s ease-in-out infinite; }
+/* dreamy: a slow sway */
+.tut-char[data-tut-mood="dreamy"] .tut-bob { animation: tut-dream 7s ease-in-out infinite; }
+/* yawn: every few seconds the mouth opens wide and the figure stretches up */
+.tut-char[data-tut-mood="yawn"] .tut-mouth { animation: tut-yawn 4.2s steps(1) infinite; }
+.tut-char[data-tut-mood="yawn"] .tut-bob { animation: tut-stretch 4.2s ease-in-out infinite; }
+/* drowsy: heavy eyes, shut most of the time, a nod off and a jolt awake */
+.tut-char[data-tut-mood="drowsy"] .tut-eyes { animation: tut-heavy-eyes 3.4s steps(1) infinite; }
+.tut-char[data-tut-mood="drowsy"] .tut-lid { animation: tut-heavy-lid 3.4s steps(1) infinite; }
+.tut-char[data-tut-mood="drowsy"] .tut-bob { animation: tut-nod 3.4s ease-in-out infinite; }
+/* cozy: slow, contented blinks (the lid held long), breathing slow */
+.tut-char[data-tut-mood="cozy"] .tut-eyes { animation: tut-heavy-eyes 5s steps(1) infinite; }
+.tut-char[data-tut-mood="cozy"] .tut-lid { animation: tut-heavy-lid 5s steps(1) infinite; }
+.tut-char[data-tut-mood="cozy"] .tut-breathe { animation-duration: 5.2s; }
+@keyframes tut-doze {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  50% { transform: rotate(7deg) translateY(2%); }
+}
+@keyframes tut-dream {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}
+@keyframes tut-yawn {
+  0%, 100% { transform: scaleY(0.32); }
+  58% { transform: scaleY(1.1); }
+  66% { transform: scaleY(1.9); }
+  84% { transform: scaleY(1.1); }
+  90% { transform: scaleY(0.32); }
+}
+@keyframes tut-stretch {
+  0%, 55%, 100% { transform: scale(1, 1); }
+  70%, 80% { transform: scale(0.96, 1.06); }
+}
+@keyframes tut-heavy-eyes {
+  0% { opacity: 1; }
+  19%, 100% { opacity: 0; }
+}
+@keyframes tut-heavy-lid {
+  0% { opacity: 0; }
+  19%, 100% { opacity: 1; }
+}
+@keyframes tut-nod {
+  0%, 20% { transform: rotate(0deg); }
+  70% { transform: rotate(10deg) translateY(3%); }
+  76%, 100% { transform: rotate(0deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tut-char:is([data-tut-mood="sleepy"], [data-tut-mood="dreamy"], [data-tut-mood="yawn"], [data-tut-mood="drowsy"]) .tut-bob { animation: none; }
+  .tut-char[data-tut-mood="yawn"] .tut-mouth { animation: none; }
+}
+
+/* ---- feelings (lib/guide/tutorFeelings.ts; TutorCharacter sets data-tut-feel, and
+   data-tut-move for its own small moves when idle). The same on all seven: faces drawn over
+   their own (avatarArt faceOverlay: tut-joy, tut-brows, tut-smile, tut-grin, tut-frown,
+   tut-wobble, tut-tear, tut-sweat), hidden until a feeling shows one; the whole figure's moves
+   on .tut-hop (a box: transform only, % of the box, run by the compositor); the tear and the
+   sweat drop step through held poses, as every part inside the drawing does. While it talks
+   its own mouth keeps talking and only the eyes change. ---- */
+.tut-char .tut-face > * { opacity: 0; }
+.tut-char .tut-drop { fill: #8fd0f4; }
+
+/* happy, excited, celebrate, giggle: eyes squeezed into happy arcs, rosy cheeks */
+.tut-char:is([data-tut-feel="happy"], [data-tut-feel="excited"], [data-tut-feel="celebrate"], [data-tut-feel="giggle"]) .tut-look { opacity: 0; }
+.tut-char:is([data-tut-feel="happy"], [data-tut-feel="excited"], [data-tut-feel="celebrate"], [data-tut-feel="giggle"]) .tut-joy { opacity: 1; }
+.tut-char:is([data-tut-feel="happy"], [data-tut-feel="excited"], [data-tut-feel="celebrate"], [data-tut-feel="giggle"]) .tut-fc { opacity: 0.95; }
+/* its own mouth makes way for the feeling's, unless it is talking */
+.tut-char[data-tut-feel]:not([data-tut-mood="talking"]) .tut-mouth { opacity: 0; }
+.tut-char[data-tut-feel="happy"]:not([data-tut-mood="talking"]) .tut-smile { opacity: 1; }
+.tut-char:is([data-tut-feel="excited"], [data-tut-feel="celebrate"], [data-tut-feel="giggle"]):not([data-tut-mood="talking"]) .tut-grin { opacity: 1; }
+/* Pip has no mouth to swap: its beak opens in a grin */
+.tut-char:is([data-tut-feel="excited"], [data-tut-feel="celebrate"], [data-tut-feel="giggle"]):not([data-tut-mood="talking"]) .tut-jaw { transform: translateY(1.4px); }
+
+/* sad: brows up, eyes down, a frown, a tear rolling; it droops */
+.tut-char:is([data-tut-feel="sad"], [data-tut-feel="guilty"]) .tut-brows { opacity: 1; }
+.tut-char[data-tut-feel="sad"] .tut-look { animation: none; transform: translate(0, 1px); }
+.tut-char[data-tut-feel="sad"]:not([data-tut-mood="talking"]) .tut-frown { opacity: 1; }
+.tut-char[data-tut-feel="sad"] .tut-tear { opacity: 1; animation: tut-tear 2s steps(1) infinite; }
+.tut-char[data-tut-feel="sad"] .tut-fc { opacity: 0; }
+.tut-char[data-tut-feel="sad"] > .tut-lean { transform: translateY(2.5%) scale(1.03, 0.95); }
+.tut-char[data-tut-feel="sad"] .tut-breathe { animation-duration: 5.4s; }
+
+/* guilty: looks away and down, a wobbly mouth, a sweat drop, shifts from foot to foot */
+.tut-char[data-tut-feel="guilty"] .tut-look { animation: none; transform: translate(-1.4px, 0.9px); }
+.tut-char[data-tut-feel="guilty"]:not([data-tut-mood="talking"]) .tut-wobble { opacity: 1; }
+.tut-char[data-tut-feel="guilty"] .tut-sweat { opacity: 1; animation: tut-sweat 2.4s steps(1) infinite; }
+.tut-char[data-tut-feel="guilty"] > .tut-lean { transform: rotate(4deg) scale(0.97); }
+.tut-char[data-tut-feel="guilty"] .tut-hop { animation: tut-shuffle 1.6s ease-in-out infinite; }
+
+/* the whole figure's moves (.tut-char doubled: a feeling outranks an arrival's hop, which
+   would otherwise put the body and its shadow out of step) */
+.tut-char.tut-char[data-tut-feel="happy"] .tut-hop,
+.tut-char.tut-char[data-tut-move="jump"] .tut-hop { animation: tut-jump 0.75s cubic-bezier(0.3, 0.7, 0.4, 1) both; }
+.tut-char.tut-char[data-tut-feel="happy"] .tut-ground,
+.tut-char.tut-char[data-tut-move="jump"] .tut-ground { animation: tut-shadow-jump 0.75s cubic-bezier(0.3, 0.7, 0.4, 1) both; }
+.tut-char.tut-char[data-tut-feel="excited"] .tut-hop { animation: tut-bounce 0.42s ease-in-out infinite alternate; }
+.tut-char.tut-char[data-tut-feel="excited"] .tut-ground { animation: tut-shadow-bounce 0.42s ease-in-out infinite alternate; }
+.tut-char.tut-char[data-tut-feel="celebrate"] .tut-hop { animation: tut-flip 1.15s cubic-bezier(0.35, 0.6, 0.35, 1) both, tut-bounce 0.42s ease-in-out 1.2s infinite alternate; }
+.tut-char.tut-char[data-tut-feel="celebrate"] .tut-ground { animation: tut-shadow-flip 1.15s ease-in-out both, tut-shadow-bounce 0.42s ease-in-out 1.2s infinite alternate; }
+.tut-char.tut-char[data-tut-move="flip"] .tut-hop { animation: tut-flip 1.15s cubic-bezier(0.35, 0.6, 0.35, 1) both; }
+.tut-char.tut-char[data-tut-move="flip"] .tut-ground { animation: tut-shadow-flip 1.15s ease-in-out both; }
+.tut-char.tut-char[data-tut-move="side"] .tut-hop { animation: tut-side 1.45s ease-in-out both; }
+.tut-char.tut-char[data-tut-feel="giggle"] .tut-hop { animation: tut-giggle 0.36s ease-in-out infinite alternate; }
+/* the dock's 20 px face only changes its face: a move would leave its button */
+.tut-char.tut-char.tut-char[data-optical="xs"] .tut-hop { animation: none; }
+
+/* a celebration's confetti: each piece on a box the size of the figure, turned to its own
+   direction (TutorCharacter), flies up out of it and fades */
+.tut-char .tut-fx { position: absolute; inset: 0; pointer-events: none; }
+.tut-char .tut-spark { position: absolute; inset: 0; transform-origin: 50% 55%; }
+.tut-char .tut-confetti {
+  position: absolute;
+  left: 47%;
+  top: 40%;
+  width: 7%;
+  height: 11%;
+  border-radius: 1px;
+  background: #f5b335;
+  opacity: 0;
+  animation: tut-confetti 1.3s cubic-bezier(0.2, 0.8, 0.4, 1) 0.45s both;
+}
+.tut-char .tut-spark:nth-child(4n + 2) .tut-confetti { background: #e2574c; animation-delay: 0.5s; }
+.tut-char .tut-spark:nth-child(4n + 3) .tut-confetti { background: #73ad60; animation-delay: 0.55s; }
+.tut-char .tut-spark:nth-child(4n) .tut-confetti { background: #7aa7f0; animation-delay: 0.6s; border-radius: 50%; }
+
+@keyframes tut-jump {
+  0% { transform: translateY(0) scale(1, 1); }
+  15% { transform: translateY(0.78125%) scale(1.09, 0.88); }
+  45% { transform: translateY(-21.875%) scale(0.94, 1.08); }
+  72% { transform: translateY(0) scale(1.1, 0.88); }
+  86% { transform: translateY(0) scale(0.97, 1.04); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+@keyframes tut-shadow-jump {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  45% { transform: scale(0.5); opacity: 0.4; }
+  72% { transform: scale(1.15); opacity: 1; }
+}
+@keyframes tut-bounce {
+  from { transform: translateY(0) scale(1.05, 0.94); }
+  to { transform: translateY(-12.5%) scale(0.97, 1.04); }
+}
+@keyframes tut-shadow-bounce {
+  from { transform: scale(1.08); opacity: 1; }
+  to { transform: scale(0.7); opacity: 0.55; }
+}
+/* A backflip round its middle: the box turns on its feet, so it is lifted to its middle, turned
+   and set back down (the same five steps in every frame, so each is eased on its own). */
+@keyframes tut-flip {
+  0% { transform: translateY(0) translateY(-43.75%) rotate(0deg) translateY(43.75%) scale(1, 1); }
+  16% { transform: translateY(1.5625%) translateY(-43.75%) rotate(0deg) translateY(43.75%) scale(1.1, 0.86); }
+  36% { transform: translateY(-34%) translateY(-43.75%) rotate(-130deg) translateY(43.75%) scale(0.95, 1.05); }
+  56% { transform: translateY(-36%) translateY(-43.75%) rotate(-250deg) translateY(43.75%) scale(0.95, 1.05); }
+  78% { transform: translateY(-4%) translateY(-43.75%) rotate(-352deg) translateY(43.75%) scale(1, 1); }
+  88% { transform: translateY(0) translateY(-43.75%) rotate(-360deg) translateY(43.75%) scale(1.1, 0.88); }
+  100% { transform: translateY(0) translateY(-43.75%) rotate(-360deg) translateY(43.75%) scale(1, 1); }
+}
+@keyframes tut-shadow-flip {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  16% { transform: scale(1.12); opacity: 1; }
+  45% { transform: scale(0.45); opacity: 0.35; }
+  88% { transform: scale(1.15); opacity: 1; }
+}
+/* two little hops to one side, two back */
+@keyframes tut-side {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  12% { transform: translate(-7%, -7%) rotate(-6deg); }
+  24% { transform: translate(-14%, 0) rotate(0deg); }
+  36% { transform: translate(-7%, -7%) rotate(6deg); }
+  50% { transform: translate(0, 0) rotate(0deg); }
+  62% { transform: translate(7%, -7%) rotate(6deg); }
+  74% { transform: translate(14%, 0) rotate(0deg); }
+  87% { transform: translate(7%, -7%) rotate(-6deg); }
+}
+@keyframes tut-giggle {
+  from { transform: translateY(0) rotate(-6deg) scale(1.03, 0.96); }
+  to { transform: translateY(-3%) rotate(6deg) scale(0.98, 1.03); }
+}
+@keyframes tut-shuffle {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  30% { transform: translateX(-2.5%) rotate(-2deg); }
+  70% { transform: translateX(2.5%) rotate(2deg); }
+}
+@keyframes tut-confetti {
+  0% { transform: translateY(0) rotate(0deg) scale(0.4); opacity: 0; }
+  12% { opacity: 1; }
+  60% { transform: translateY(-260%) rotate(220deg) scale(1); opacity: 1; }
+  100% { transform: translateY(-320%) rotate(400deg) scale(0.8); opacity: 0; }
+}
+/* the tear rolls down the cheek in four held poses, then wells up again */
+@keyframes tut-tear {
+  0%, 100% { transform: translateY(0) scale(0.6); opacity: 1; }
+  25% { transform: translateY(0) scale(1); opacity: 1; }
+  50% { transform: translateY(2px) scale(1); opacity: 1; }
+  75% { transform: translateY(4px) scale(0.9); opacity: 0.6; }
+}
+@keyframes tut-sweat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(1px); }
+}
+
+/* ---- five more feelings (2026-11-15): love, wink, surprised, curious, dizzy. The same rules as the
+   first six: faces over its own (avatarArt faceOverlay), the whole figure's moves on .tut-hop in % of
+   the box, the parts inside the drawing in held poses (steps(1)). ---- */
+.tut-char .tut-heart { fill: #e5484d; }
+.tut-char:is([data-tut-feel="love"], [data-tut-feel="wink"], [data-tut-feel="surprised"], [data-tut-feel="dizzy"]) .tut-look { opacity: 0; }
+.tut-char[data-tut-feel="love"] .tut-love-eyes { opacity: 1; }
+.tut-char[data-tut-feel="love"] .tut-float-heart { opacity: 1; animation: tut-float-heart 1.6s steps(1) infinite; }
+.tut-char[data-tut-feel="love"]:not([data-tut-mood="talking"]) .tut-smile { opacity: 1; }
+.tut-char:is([data-tut-feel="love"], [data-tut-feel="wink"]) .tut-fc { opacity: 0.95; }
+.tut-char[data-tut-feel="wink"] .tut-wink { opacity: 1; }
+.tut-char[data-tut-feel="wink"]:not([data-tut-mood="talking"]) .tut-grin { opacity: 1; }
+.tut-char[data-tut-feel="surprised"] .tut-wow { opacity: 1; }
+.tut-char[data-tut-feel="surprised"]:not([data-tut-mood="talking"]) .tut-wow-mouth { opacity: 1; }
+.tut-char[data-tut-feel="curious"] .tut-look { animation: none; transform: translate(1px, -0.9px); }
+.tut-char[data-tut-feel="curious"] .tut-brow-up { opacity: 1; }
+.tut-char[data-tut-feel="curious"] .tut-ask { opacity: 1; animation: tut-ask 1.4s steps(1) infinite; }
+.tut-char[data-tut-feel="curious"]:not([data-tut-mood="talking"]) .tut-hmm { opacity: 1; }
+.tut-char[data-tut-feel="curious"] > .tut-lean { transform: rotate(-7deg); }
+.tut-char[data-tut-feel="dizzy"] .tut-spiral { opacity: 1; }
+.tut-char[data-tut-feel="dizzy"] .tut-spiral > * { animation: tut-spin 0.8s steps(1) infinite; }
+.tut-char[data-tut-feel="dizzy"]:not([data-tut-mood="talking"]) .tut-wobble { opacity: 1; }
+
+.tut-char.tut-char[data-tut-feel="love"] .tut-hop { animation: tut-love-sway 0.9s ease-in-out infinite alternate; }
+.tut-char.tut-char[data-tut-feel="wink"] .tut-hop { animation: tut-nod 0.7s ease-in-out both; }
+.tut-char.tut-char[data-tut-feel="surprised"] .tut-hop { animation: tut-startle 0.55s cubic-bezier(0.3, 0.7, 0.4, 1) both; }
+.tut-char.tut-char[data-tut-feel="surprised"] .tut-ground { animation: tut-shadow-jump 0.55s cubic-bezier(0.3, 0.7, 0.4, 1) both; }
+.tut-char.tut-char[data-tut-feel="dizzy"] .tut-hop { animation: tut-dizzy 0.7s ease-in-out infinite alternate; }
+.tut-char.tut-char.tut-char[data-optical="xs"] .tut-hop { animation: none; }
+
+@keyframes tut-love-sway {
+  from { transform: translateY(0) rotate(-4deg); }
+  to { transform: translateY(-3%) rotate(4deg); }
+}
+@keyframes tut-nod {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  35% { transform: translateY(1.5%) rotate(-5deg); }
+  70% { transform: translateY(0) rotate(2deg); }
+}
+@keyframes tut-startle {
+  0% { transform: translateY(0) scale(1, 1); }
+  30% { transform: translateY(-12.5%) scale(0.93, 1.09); }
+  65% { transform: translateY(0) scale(1.06, 0.93); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+@keyframes tut-dizzy {
+  from { transform: translateX(-3%) rotate(-7deg); }
+  to { transform: translateX(3%) rotate(7deg); }
+}
+/* hearts rising beside the head, in four held poses */
+@keyframes tut-float-heart {
+  0%, 100% { transform: translateY(0) scale(0.6); opacity: 0.4; }
+  25% { transform: translateY(-1.5px) scale(1); opacity: 1; }
+  50% { transform: translateY(-3px) scale(1); opacity: 1; }
+  75% { transform: translateY(-4.5px) scale(0.9); opacity: 0.6; }
+}
+@keyframes tut-ask {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-1px) rotate(8deg); }
+}
+@keyframes tut-spin {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(90deg); }
+  50% { transform: rotate(180deg); }
+  75% { transform: rotate(270deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tut-char .tut-float-heart,
+  .tut-char .tut-ask,
+  .tut-char .tut-spiral > * { animation: none !important; }
+}
+/* the question mark keeps a paper edge, so it reads over the character or the page behind */
+.tut-char .tut-ask-edge { fill: none; stroke: var(--tut-edge); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+.tut-char .tut-ask-dot { fill: var(--tut-edge); }
+
+/* ---- ten more feelings (2026-11-15, the desktop's floating tutor above all): proud, shy, cool, laugh,
+   grumpy, scared, bored, yum, starstruck, singing. The same rules again: faces over its own, the
+   figure's moves on .tut-hop in % of the box, the parts inside in held poses. ---- */
+.tut-char .tut-star { fill: #f8c630; }
+.tut-char .tut-blush { fill: #ef6f6c; opacity: 0; }
+.tut-char .tut-shine { fill: none; stroke: #fffdf6; stroke-width: 0.9; stroke-linecap: round; }
+.tut-char .tut-puff { fill: #e9e6ee; }
+/* their own eyes make way for drawn ones */
+.tut-char:is([data-tut-feel="proud"], [data-tut-feel="cool"], [data-tut-feel="laugh"], [data-tut-feel="scared"], [data-tut-feel="bored"], [data-tut-feel="yum"], [data-tut-feel="starstruck"], [data-tut-feel="singing"]) .tut-look { opacity: 0; }
+.tut-char[data-tut-feel="proud"] :is(.tut-smug, .tut-sparkle) { opacity: 1; }
+.tut-char[data-tut-feel="proud"] .tut-sparkle { animation: tut-twinkle 1.2s steps(1) infinite; }
+.tut-char:is([data-tut-feel="proud"], [data-tut-feel="cool"]):not([data-tut-mood="talking"]) .tut-smirk { opacity: 1; }
+.tut-char[data-tut-feel="proud"] > .tut-lean { transform: rotate(4deg); }
+.tut-char[data-tut-feel="shy"] .tut-blush { opacity: 0.85; }
+.tut-char[data-tut-feel="shy"] .tut-fc { opacity: 0; }
+.tut-char[data-tut-feel="shy"] .tut-look { animation: none; transform: translate(-1.3px, 1.1px); }
+.tut-char[data-tut-feel="shy"]:not([data-tut-mood="talking"]) .tut-smile { opacity: 1; }
+.tut-char[data-tut-feel="shy"] > .tut-lean { transform: rotate(-5deg) scale(0.97); }
+.tut-char[data-tut-feel="cool"] .tut-shades { opacity: 1; }
+.tut-char[data-tut-feel="laugh"] :is(.tut-squeeze, .tut-joy-tear) { opacity: 1; }
+.tut-char[data-tut-feel="laugh"] .tut-joy-tear { animation: tut-tear 1s steps(1) infinite; }
+.tut-char[data-tut-feel="laugh"]:not([data-tut-mood="talking"]) .tut-grin { opacity: 1; }
+.tut-char[data-tut-feel="laugh"] .tut-fc { opacity: 0.95; }
+.tut-char[data-tut-feel="grumpy"] :is(.tut-brows-down, .tut-steam) { opacity: 1; }
+.tut-char[data-tut-feel="grumpy"] .tut-steam { animation: tut-steam 1.2s steps(1) infinite; }
+.tut-char[data-tut-feel="grumpy"]:not([data-tut-mood="talking"]) .tut-pout { opacity: 1; }
+.tut-char[data-tut-feel="grumpy"] .tut-look { animation: none; transform: translate(0, 0.6px); }
+.tut-char[data-tut-feel="scared"] :is(.tut-fright, .tut-sweat) { opacity: 1; }
+.tut-char[data-tut-feel="scared"]:not([data-tut-mood="talking"]) .tut-wobble { opacity: 1; }
+.tut-char[data-tut-feel="scared"] > .tut-lean { transform: scale(0.94); }
+.tut-char[data-tut-feel="bored"] .tut-half { opacity: 1; }
+.tut-char[data-tut-feel="bored"]:not([data-tut-mood="talking"]) .tut-hmm { opacity: 1; }
+.tut-char[data-tut-feel="bored"] .tut-breathe { animation-duration: 6s; }
+.tut-char[data-tut-feel="yum"] .tut-joy { opacity: 1; }
+.tut-char[data-tut-feel="yum"]:not([data-tut-mood="talking"]) :is(.tut-smile, .tut-lick) { opacity: 1; }
+.tut-char[data-tut-feel="yum"] .tut-lick { animation: tut-lick 1s steps(1) infinite; }
+.tut-char[data-tut-feel="yum"] .tut-fc { opacity: 0.95; }
+.tut-char[data-tut-feel="starstruck"] .tut-star-eyes { opacity: 1; }
+.tut-char[data-tut-feel="starstruck"]:not([data-tut-mood="talking"]) .tut-grin { opacity: 1; }
+.tut-char[data-tut-feel="singing"] :is(.tut-smug, .tut-notes) { opacity: 1; }
+.tut-char[data-tut-feel="singing"] .tut-notes { animation: tut-float-heart 1.6s steps(1) infinite; }
+.tut-char[data-tut-feel="singing"]:not([data-tut-mood="talking"]) .tut-wow-mouth { opacity: 1; }
+
+.tut-char.tut-char[data-tut-feel="proud"] .tut-hop { animation: tut-proud 0.8s ease-out both; }
+.tut-char.tut-char[data-tut-feel="shy"] .tut-hop { animation: tut-love-sway 1.2s ease-in-out infinite alternate; }
+.tut-char.tut-char[data-tut-feel="cool"] .tut-hop { animation: tut-groove 0.5s ease-in-out infinite alternate; }
+.tut-char.tut-char[data-tut-feel="laugh"] .tut-hop { animation: tut-giggle 0.22s ease-in-out infinite alternate; }
+.tut-char.tut-char[data-tut-feel="grumpy"] .tut-hop { animation: tut-stomp 0.5s ease-in-out 2; }
+.tut-char.tut-char[data-tut-feel="scared"] .tut-hop { animation: tut-tremble 0.09s linear infinite alternate; }
+.tut-char.tut-char[data-tut-feel="bored"] .tut-hop { animation: tut-sigh 3.6s ease-in-out both; }
+.tut-char.tut-char[data-tut-feel="yum"] .tut-hop { animation: tut-nod 0.7s ease-in-out both; }
+.tut-char.tut-char[data-tut-feel="starstruck"] .tut-hop { animation: tut-bounce 0.42s ease-in-out infinite alternate; }
+.tut-char.tut-char[data-tut-feel="starstruck"] .tut-ground { animation: tut-shadow-bounce 0.42s ease-in-out infinite alternate; }
+.tut-char.tut-char[data-tut-feel="singing"] .tut-hop { animation: tut-love-sway 0.8s ease-in-out infinite alternate; }
+.tut-char.tut-char.tut-char[data-optical="xs"] .tut-hop { animation: none; }
+
+@keyframes tut-proud {
+  0% { transform: translateY(0) scale(1, 1); }
+  40% { transform: translateY(-4%) scale(1.04, 1.05); }
+  100% { transform: translateY(-2%) scale(1.03, 1.03); }
+}
+@keyframes tut-groove {
+  from { transform: translateY(0) rotate(-2deg); }
+  to { transform: translateY(2%) rotate(2deg); }
+}
+@keyframes tut-stomp {
+  0%, 100% { transform: translateX(0) scale(1, 1); }
+  25% { transform: translateX(-2.5%) scale(1.04, 0.95); }
+  75% { transform: translateX(2.5%) scale(1.04, 0.95); }
+}
+@keyframes tut-tremble {
+  from { transform: translateX(-1.2%); }
+  to { transform: translateX(1.2%); }
+}
+@keyframes tut-sigh {
+  0%, 100% { transform: translateY(0) scale(1, 1); }
+  30% { transform: translateY(-1%) scale(1.02, 1.03); }
+  60% { transform: translateY(2%) scale(1.04, 0.93); }
+}
+@keyframes tut-twinkle {
+  0%, 100% { transform: scale(0.5) rotate(0deg); opacity: 0.6; }
+  33% { transform: scale(1) rotate(20deg); opacity: 1; }
+  66% { transform: scale(0.8) rotate(45deg); opacity: 1; }
+}
+@keyframes tut-steam {
+  0%, 100% { transform: translateY(0) scale(0.7); opacity: 0.5; }
+  33% { transform: translateY(-1.5px) scale(1); opacity: 1; }
+  66% { transform: translateY(-3px) scale(1.1); opacity: 0.7; }
+}
+@keyframes tut-lick {
+  0%, 100% { transform: translateX(0); opacity: 1; }
+  50% { transform: translateX(-1.2px); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tut-char .tut-sparkle,
+  .tut-char .tut-joy-tear,
+  .tut-char .tut-steam,
+  .tut-char .tut-lick,
+  .tut-char .tut-notes { animation: none !important; }
+}
 
 /* src/components/auth/logoHang.css (web) */
 /* ---- the tutor hanging by one hand from the sign-in page's logo (components/auth/LogoHang.tsx)
@@ -795,7 +1184,7 @@
 
         <main class="form-col" id="form-col">
           <!-- sign-in-tutor:start -->
-          <span class="logo-hang-wrap logo-wrap"><img class="logo" src="tutornote-wordmark.png" alt="Tutornote" /><span aria-hidden="true" class="logo-hang" style="left:95.1%;top:calc(98.11% - 1.5px)"><span class="logo-hang-sway"><span class="logo-hang-swing"><span class="logo-hang-figure" style="left:-26.16px;top:-12.79px;transform-origin:26.16px 12.79px;transform:rotate(-14deg);--hang-raise:-165deg"><span class="guide-avatar tut-char" data-look="pip" data-tut-mood="idle" data-optical="sm" style="width:38px;height:38px;--tut-limb:#293466;--tut-persp:114px;--tut-d:-6.482s"><span class="tut-lean"><svg class="tut-ground" viewBox="0 0 64 64" width="100%" height="100%" aria-hidden="true" focusable="false" style="transform-origin:50% 91.25%"><ellipse class="tut-shadow" cx="32" cy="58.4" rx="12" ry="2" fill="url(#tut3f84eeR1-gr)"></ellipse></svg><span class="tut-hop"><span class="tut-turn"><span class="tut-bob"><span class="tut-breathe"><svg viewBox="0 0 64 64" width="100%" height="100%" aria-hidden="true" focusable="false"><defs><radialGradient id="tut3f84eeR1-fm" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#a0c3fa"/><stop offset="0.42" stop-color="#3f84ee"/><stop offset="0.88" stop-color="#324e92"/><stop offset="1" stop-color="#324e92"/></radialGradient><radialGradient id="tut3f84eeR1-fs" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#dee8f8"/><stop offset="0.42" stop-color="#bdd2f1"/><stop offset="0.88" stop-color="#717794"/><stop offset="1" stop-color="#717794"/></radialGradient><radialGradient id="tut3f84eeR1-fd" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#97afda"/><stop offset="0.42" stop-color="#3760b0"/><stop offset="0.88" stop-color="#2c3b71"/><stop offset="1" stop-color="#2c3b71"/></radialGradient><radialGradient id="tut3f84eeR1-fi" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#635b6c"/><stop offset="0.42" stop-color="#1c141e"/><stop offset="0.88" stop-color="#050306"/><stop offset="1" stop-color="#050306"/></radialGradient><radialGradient id="tut3f84eeR1-beak" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#fdd5a1"/><stop offset="0.42" stop-color="#f8a91f"/><stop offset="0.88" stop-color="#8f6339"/><stop offset="1" stop-color="#8f6339"/></radialGradient><radialGradient id="tut3f84eeR1-fw"><stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient><radialGradient id="tut3f84eeR1-fc"><stop offset="0" stop-color="#ff5f7e" stop-opacity="0.8"/><stop offset="1" stop-color="#ff5f7e" stop-opacity="0"/></radialGradient><radialGradient id="tut3f84eeR1-gr"><stop offset="0" style="stop-color:var(--tut-ground)"/><stop offset="0.55" style="stop-color:var(--tut-ground);stop-opacity:0.5"/><stop offset="1" style="stop-color:var(--tut-ground);stop-opacity:0"/></radialGradient></defs><g class="tut-edge"><g class="tut-tail" style="transform-origin:17px 41px"><path class="tut-fd tut-k" d="M17.6 43.4C13.8 45.6 10.4 45 8.4 42.4C11 42 12.6 40.8 13.8 38.6C15.2 40.2 16.4 41.6 17.6 43.4Z"/></g><path class="tut-k tut-nf" d="M27.8 50.6L27.2 56.4M24.6 57.4L27.2 56.4L29.6 57.6M36.2 50.6L36.8 56.4M34.4 57.6L36.8 56.4L39.4 57.4"/><path class="tut-k tut-nf" d="M31.2 19.2C30.2 16.2 30.8 13.8 33 12.8M33.8 18.9C34.6 16.6 36.6 15.4 38.8 16"/><path class="tut-fm tut-k" d="M32.4 18.6C41.8 18.4 49.4 25.8 49.1 35.4C48.8 45 41.4 51.8 31.8 51.6C22.4 51.4 15 44.4 15.1 35.2C15.2 25.6 22.8 18.8 32.4 18.6Z"/><path class="tut-fw" d="M20.4 30.8C21.4 25.4 26 21.8 31 21.4C27.4 23.8 24.8 27 24 31.2C22.8 32.2 21.2 32.2 20.4 30.8Z"/><path class="tut-fs tut-kt" d="M32 31.4C38.8 31.2 43.6 36.6 42.8 42.8C42 48 37.6 50.8 32 50.8C26.4 50.8 22 48 21.2 42.8C20.4 36.6 25.2 31.6 32 31.4Z"/><path class="tut-kx" d="M32.6 41.4l1.3 1.2 1.3-1.2M35.8 44.6l1.2 1.1 1.2-1.1M30.6 45.8l1.2 1.1 1.2-1.1"/><path class="tut-kw" d="M47.8 41.2C45.6 47 39.6 51.4 32.4 51.6"/><path class="tut-kx" d="M38.6 20.2C43.4 21.8 47 25.6 48.4 30.4"/><ellipse class="tut-fc" cx="22.2" cy="35.4" rx="2.6" ry="1.6"/><ellipse class="tut-fc" cx="41.8" cy="35.4" rx="2.6" ry="1.6"/><g class="tut-look"><g class="tut-bead" style="transform-origin:26px 29.6px"><g class="tut-eyes" style="transform-origin:26px 29.6px"><ellipse class="tut-fi" cx="26" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="26.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M23.3 29.5Q26 31.5 28.7 29.5"/></g><g class="tut-bead" style="transform-origin:38px 29.6px"><g class="tut-eyes" style="transform-origin:38px 29.6px"><ellipse class="tut-fi" cx="38" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="38.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M35.3 29.5Q38 31.5 40.7 29.5"/></g></g><ellipse class="tut-fi" cx="32" cy="35.2" rx="2.2" ry="2.2"/><path class="tut-jaw tut-beak tut-kt" d="M29.4 35L32 35.8L34.6 35Q33.6 38.2 32 38.6Q30.4 38.2 29.4 35Z"/><path class="tut-jaw-up tut-beak tut-kt" d="M28.2 33.4Q32 31.4 35.8 33.4Q34 35.6 32 36Q30 35.6 28.2 33.4Z"/><g class="tut-wing-l" style="transform-origin:18.4px 33.4px"><path class="tut-fd tut-k" d="M18.2 33C13.4 34.6 11.4 40 13.4 44.8C17 44.6 19.8 40.8 19.8 36.6C19.8 35.2 19.2 33.8 18.2 33Z"/></g><g class="tut-wave" style="transform-origin:45.8px 33.6px;--raise:-95deg;--wig:24deg"><g class="tut-wing-r" style="transform-origin:45.8px 33.6px"><path class="tut-fd tut-k" d="M45.8 33C50.6 34.6 52.6 40 50.6 44.8C47 44.6 44.2 40.8 44.2 36.6C44.2 35.2 44.8 33.8 45.8 33Z"/><path class="tut-kx" d="M47.2 38.2q1.8 1.6 1.6 4"/></g></g></g><g><g class="tut-tail" style="transform-origin:17px 41px"><path class="tut-fd tut-k" fill="url(#tut3f84eeR1-fd) #3760b0" stroke="#293466" d="M17.6 43.4C13.8 45.6 10.4 45 8.4 42.4C11 42 12.6 40.8 13.8 38.6C15.2 40.2 16.4 41.6 17.6 43.4Z"/></g><path class="tut-k tut-nf" d="M27.8 50.6L27.2 56.4M24.6 57.4L27.2 56.4L29.6 57.6M36.2 50.6L36.8 56.4M34.4 57.6L36.8 56.4L39.4 57.4"/><path class="tut-k tut-nf" d="M31.2 19.2C30.2 16.2 30.8 13.8 33 12.8M33.8 18.9C34.6 16.6 36.6 15.4 38.8 16"/><path class="tut-fm tut-k" fill="url(#tut3f84eeR1-fm) #3f84ee" stroke="#2f4481" d="M32.4 18.6C41.8 18.4 49.4 25.8 49.1 35.4C48.8 45 41.4 51.8 31.8 51.6C22.4 51.4 15 44.4 15.1 35.2C15.2 25.6 22.8 18.8 32.4 18.6Z"/><path class="tut-fw" fill="url(#tut3f84eeR1-fw)" d="M20.4 30.8C21.4 25.4 26 21.8 31 21.4C27.4 23.8 24.8 27 24 31.2C22.8 32.2 21.2 32.2 20.4 30.8Z"/><path class="tut-fs tut-kt" fill="url(#tut3f84eeR1-fs) #bdd2f1" stroke="#636783" d="M32 31.4C38.8 31.2 43.6 36.6 42.8 42.8C42 48 37.6 50.8 32 50.8C26.4 50.8 22 48 21.2 42.8C20.4 36.6 25.2 31.6 32 31.4Z"/><path class="tut-kx" d="M32.6 41.4l1.3 1.2 1.3-1.2M35.8 44.6l1.2 1.1 1.2-1.1M30.6 45.8l1.2 1.1 1.2-1.1"/><path class="tut-kw" d="M47.8 41.2C45.6 47 39.6 51.4 32.4 51.6"/><path class="tut-kx" d="M38.6 20.2C43.4 21.8 47 25.6 48.4 30.4"/><ellipse class="tut-fc" fill="url(#tut3f84eeR1-fc)" cx="22.2" cy="35.4" rx="2.6" ry="1.6"/><ellipse class="tut-fc" fill="url(#tut3f84eeR1-fc)" cx="41.8" cy="35.4" rx="2.6" ry="1.6"/><g class="tut-look"><g class="tut-bead" style="transform-origin:26px 29.6px"><g class="tut-eyes" style="transform-origin:26px 29.6px"><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="26" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="26.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M23.3 29.5Q26 31.5 28.7 29.5"/></g><g class="tut-bead" style="transform-origin:38px 29.6px"><g class="tut-eyes" style="transform-origin:38px 29.6px"><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="38" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="38.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M35.3 29.5Q38 31.5 40.7 29.5"/></g></g><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="32" cy="35.2" rx="2.2" ry="2.2"/><path class="tut-jaw tut-beak tut-kt" fill="url(#tut3f84eeR1-beak) #f8a91f" stroke="#7c5738" d="M29.4 35L32 35.8L34.6 35Q33.6 38.2 32 38.6Q30.4 38.2 29.4 35Z"/><path class="tut-jaw-up tut-beak tut-kt" fill="url(#tut3f84eeR1-beak) #f8a91f" stroke="#7c5738" d="M28.2 33.4Q32 31.4 35.8 33.4Q34 35.6 32 36Q30 35.6 28.2 33.4Z"/><g class="tut-wing-l" style="transform-origin:18.4px 33.4px"><path class="tut-fd tut-k" fill="url(#tut3f84eeR1-fd) #3760b0" stroke="#293466" d="M18.2 33C13.4 34.6 11.4 40 13.4 44.8C17 44.6 19.8 40.8 19.8 36.6C19.8 35.2 19.2 33.8 18.2 33Z"/></g><g class="tut-wave" style="transform-origin:45.8px 33.6px;--raise:-95deg;--wig:24deg"><g class="tut-wing-r" style="transform-origin:45.8px 33.6px"><path class="tut-fd tut-k" fill="url(#tut3f84eeR1-fd) #3760b0" stroke="#293466" d="M45.8 33C50.6 34.6 52.6 40 50.6 44.8C47 44.6 44.2 40.8 44.2 36.6C44.2 35.2 44.8 33.8 45.8 33Z"/><path class="tut-kx" d="M47.2 38.2q1.8 1.6 1.6 4"/></g></g></g></svg></span></span></span></span></span></span></span></span></span></span></span>
+          <span class="logo-hang-wrap logo-wrap"><img class="logo" src="tutornote-wordmark.png" alt="Tutornote" /><span aria-hidden="true" class="logo-hang" style="left:95.1%;top:calc(98.11% - 1.5px)"><span class="logo-hang-sway"><span class="logo-hang-swing"><span class="logo-hang-figure" style="left:-26.16px;top:-12.79px;transform-origin:26.16px 12.79px;transform:rotate(-14deg);--hang-raise:-165deg"><span class="guide-avatar tut-char" data-look="pip" data-tut-mood="idle" data-optical="sm" style="width:38px;height:38px;--tut-limb:#293466;--tut-persp:114px;--tut-d:-6.482s"><span class="tut-lean"><svg class="tut-ground" viewBox="0 0 64 64" width="100%" height="100%" aria-hidden="true" focusable="false" style="transform-origin:50% 91.25%"><ellipse class="tut-shadow" cx="32" cy="58.4" rx="12" ry="2" fill="url(#tut3f84eeR1-gr)"></ellipse></svg><span class="tut-hop"><span class="tut-turn"><span class="tut-bob"><span class="tut-breathe"><svg viewBox="0 0 64 64" width="100%" height="100%" aria-hidden="true" focusable="false"><defs><radialGradient id="tut3f84eeR1-fm" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#a0c3fa"/><stop offset="0.42" stop-color="#3f84ee"/><stop offset="0.88" stop-color="#324e92"/><stop offset="1" stop-color="#324e92"/></radialGradient><radialGradient id="tut3f84eeR1-fs" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#dee8f8"/><stop offset="0.42" stop-color="#bdd2f1"/><stop offset="0.88" stop-color="#717794"/><stop offset="1" stop-color="#717794"/></radialGradient><radialGradient id="tut3f84eeR1-fd" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#97afda"/><stop offset="0.42" stop-color="#3760b0"/><stop offset="0.88" stop-color="#2c3b71"/><stop offset="1" stop-color="#2c3b71"/></radialGradient><radialGradient id="tut3f84eeR1-fp" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#ffffff"/><stop offset="0.42" stop-color="#fdf8ec"/><stop offset="0.88" stop-color="#c1c9d8"/><stop offset="1" stop-color="#c1c9d8"/></radialGradient><radialGradient id="tut3f84eeR1-fi" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#635b6c"/><stop offset="0.42" stop-color="#1c141e"/><stop offset="0.88" stop-color="#050306"/><stop offset="1" stop-color="#050306"/></radialGradient><radialGradient id="tut3f84eeR1-beak" cx="0.42" cy="0.36" r="0.74" fx="0.32" fy="0.24"><stop offset="0" stop-color="#fdd5a1"/><stop offset="0.42" stop-color="#f8a91f"/><stop offset="0.88" stop-color="#8f6339"/><stop offset="1" stop-color="#8f6339"/></radialGradient><radialGradient id="tut3f84eeR1-fw"><stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient><radialGradient id="tut3f84eeR1-fc"><stop offset="0" stop-color="#ff5f7e" stop-opacity="0.8"/><stop offset="1" stop-color="#ff5f7e" stop-opacity="0"/></radialGradient><radialGradient id="tut3f84eeR1-gr"><stop offset="0" style="stop-color:var(--tut-ground)"/><stop offset="0.55" style="stop-color:var(--tut-ground);stop-opacity:0.5"/><stop offset="1" style="stop-color:var(--tut-ground);stop-opacity:0"/></radialGradient></defs><g class="tut-edge"><g class="tut-tail" style="transform-origin:17px 41px"><path class="tut-fd tut-k" d="M17.6 43.4C13.8 45.6 10.4 45 8.4 42.4C11 42 12.6 40.8 13.8 38.6C15.2 40.2 16.4 41.6 17.6 43.4Z"/></g><path class="tut-k tut-nf" d="M27.8 50.6L27.2 56.4M24.6 57.4L27.2 56.4L29.6 57.6M36.2 50.6L36.8 56.4M34.4 57.6L36.8 56.4L39.4 57.4"/><path class="tut-k tut-nf" d="M31.2 19.2C30.2 16.2 30.8 13.8 33 12.8M33.8 18.9C34.6 16.6 36.6 15.4 38.8 16"/><path class="tut-fm tut-k" d="M32.4 18.6C41.8 18.4 49.4 25.8 49.1 35.4C48.8 45 41.4 51.8 31.8 51.6C22.4 51.4 15 44.4 15.1 35.2C15.2 25.6 22.8 18.8 32.4 18.6Z"/><path class="tut-fw" d="M20.4 30.8C21.4 25.4 26 21.8 31 21.4C27.4 23.8 24.8 27 24 31.2C22.8 32.2 21.2 32.2 20.4 30.8Z"/><path class="tut-fs tut-kt" d="M32 31.4C38.8 31.2 43.6 36.6 42.8 42.8C42 48 37.6 50.8 32 50.8C26.4 50.8 22 48 21.2 42.8C20.4 36.6 25.2 31.6 32 31.4Z"/><path class="tut-kx" d="M32.6 41.4l1.3 1.2 1.3-1.2M35.8 44.6l1.2 1.1 1.2-1.1M30.6 45.8l1.2 1.1 1.2-1.1"/><path class="tut-kw" d="M47.8 41.2C45.6 47 39.6 51.4 32.4 51.6"/><path class="tut-kx" d="M38.6 20.2C43.4 21.8 47 25.6 48.4 30.4"/><ellipse class="tut-fc" cx="22.2" cy="35.4" rx="2.6" ry="1.6"/><ellipse class="tut-fc" cx="41.8" cy="35.4" rx="2.6" ry="1.6"/><g class="tut-look"><g class="tut-bead" style="transform-origin:26px 29.6px"><g class="tut-eyes" style="transform-origin:26px 29.6px"><ellipse class="tut-fi" cx="26" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="26.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M23.3 29.5Q26 31.5 28.7 29.5"/></g><g class="tut-bead" style="transform-origin:38px 29.6px"><g class="tut-eyes" style="transform-origin:38px 29.6px"><ellipse class="tut-fi" cx="38" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="38.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M35.3 29.5Q38 31.5 40.7 29.5"/></g></g><ellipse class="tut-fi" cx="32" cy="35.2" rx="2.2" ry="2.2"/><path class="tut-jaw tut-beak tut-kt" d="M29.4 35L32 35.8L34.6 35Q33.6 38.2 32 38.6Q30.4 38.2 29.4 35Z"/><path class="tut-jaw-up tut-beak tut-kt" d="M28.2 33.4Q32 31.4 35.8 33.4Q34 35.6 32 36Q30 35.6 28.2 33.4Z"/><g class="tut-wing-l" style="transform-origin:18.4px 33.4px"><path class="tut-fd tut-k" d="M18.2 33C13.4 34.6 11.4 40 13.4 44.8C17 44.6 19.8 40.8 19.8 36.6C19.8 35.2 19.2 33.8 18.2 33Z"/></g><g class="tut-wave" style="transform-origin:45.8px 33.6px;--raise:-95deg;--wig:24deg"><g class="tut-wing-r" style="transform-origin:45.8px 33.6px"><path class="tut-fd tut-k" d="M45.8 33C50.6 34.6 52.6 40 50.6 44.8C47 44.6 44.2 40.8 44.2 36.6C44.2 35.2 44.8 33.8 45.8 33Z"/><path class="tut-kx" d="M47.2 38.2q1.8 1.6 1.6 4"/></g></g></g><g><g class="tut-tail" style="transform-origin:17px 41px"><path class="tut-fd tut-k" fill="url(#tut3f84eeR1-fd) #3760b0" stroke="#293466" d="M17.6 43.4C13.8 45.6 10.4 45 8.4 42.4C11 42 12.6 40.8 13.8 38.6C15.2 40.2 16.4 41.6 17.6 43.4Z"/></g><path class="tut-k tut-nf" d="M27.8 50.6L27.2 56.4M24.6 57.4L27.2 56.4L29.6 57.6M36.2 50.6L36.8 56.4M34.4 57.6L36.8 56.4L39.4 57.4"/><path class="tut-k tut-nf" d="M31.2 19.2C30.2 16.2 30.8 13.8 33 12.8M33.8 18.9C34.6 16.6 36.6 15.4 38.8 16"/><path class="tut-fm tut-k" fill="url(#tut3f84eeR1-fm) #3f84ee" stroke="#2f4481" d="M32.4 18.6C41.8 18.4 49.4 25.8 49.1 35.4C48.8 45 41.4 51.8 31.8 51.6C22.4 51.4 15 44.4 15.1 35.2C15.2 25.6 22.8 18.8 32.4 18.6Z"/><path class="tut-fw" fill="url(#tut3f84eeR1-fw)" d="M20.4 30.8C21.4 25.4 26 21.8 31 21.4C27.4 23.8 24.8 27 24 31.2C22.8 32.2 21.2 32.2 20.4 30.8Z"/><path class="tut-fs tut-kt" fill="url(#tut3f84eeR1-fs) #bdd2f1" stroke="#636783" d="M32 31.4C38.8 31.2 43.6 36.6 42.8 42.8C42 48 37.6 50.8 32 50.8C26.4 50.8 22 48 21.2 42.8C20.4 36.6 25.2 31.6 32 31.4Z"/><path class="tut-kx" d="M32.6 41.4l1.3 1.2 1.3-1.2M35.8 44.6l1.2 1.1 1.2-1.1M30.6 45.8l1.2 1.1 1.2-1.1"/><path class="tut-kw" d="M47.8 41.2C45.6 47 39.6 51.4 32.4 51.6"/><path class="tut-kx" d="M38.6 20.2C43.4 21.8 47 25.6 48.4 30.4"/><ellipse class="tut-fc" fill="url(#tut3f84eeR1-fc)" cx="22.2" cy="35.4" rx="2.6" ry="1.6"/><ellipse class="tut-fc" fill="url(#tut3f84eeR1-fc)" cx="41.8" cy="35.4" rx="2.6" ry="1.6"/><g class="tut-look"><g class="tut-bead" style="transform-origin:26px 29.6px"><g class="tut-eyes" style="transform-origin:26px 29.6px"><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="26" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="26.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M23.3 29.5Q26 31.5 28.7 29.5"/></g><g class="tut-bead" style="transform-origin:38px 29.6px"><g class="tut-eyes" style="transform-origin:38px 29.6px"><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="38" cy="29.6" rx="2.3" ry="2.6"/><circle class="tut-fh" cx="38.8" cy="28.7" r="0.85"/></g><path class="tut-lid tut-kt tut-nf" d="M35.3 29.5Q38 31.5 40.7 29.5"/></g></g><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="32" cy="35.2" rx="2.2" ry="2.2"/><path class="tut-jaw tut-beak tut-kt" fill="url(#tut3f84eeR1-beak) #f8a91f" stroke="#7c5738" d="M29.4 35L32 35.8L34.6 35Q33.6 38.2 32 38.6Q30.4 38.2 29.4 35Z"/><path class="tut-jaw-up tut-beak tut-kt" fill="url(#tut3f84eeR1-beak) #f8a91f" stroke="#7c5738" d="M28.2 33.4Q32 31.4 35.8 33.4Q34 35.6 32 36Q30 35.6 28.2 33.4Z"/><g class="tut-wing-l" style="transform-origin:18.4px 33.4px"><path class="tut-fd tut-k" fill="url(#tut3f84eeR1-fd) #3760b0" stroke="#293466" d="M18.2 33C13.4 34.6 11.4 40 13.4 44.8C17 44.6 19.8 40.8 19.8 36.6C19.8 35.2 19.2 33.8 18.2 33Z"/></g><g class="tut-wave" style="transform-origin:45.8px 33.6px;--raise:-95deg;--wig:24deg"><g class="tut-wing-r" style="transform-origin:45.8px 33.6px"><path class="tut-fd tut-k" fill="url(#tut3f84eeR1-fd) #3760b0" stroke="#293466" d="M45.8 33C50.6 34.6 52.6 40 50.6 44.8C47 44.6 44.2 40.8 44.2 36.6C44.2 35.2 44.8 33.8 45.8 33Z"/><path class="tut-kx" d="M47.2 38.2q1.8 1.6 1.6 4"/></g></g></g><g class="tut-face"><path class="tut-joy tut-kt tut-nf" d="M23.4 30.3Q26 26.4 28.6 30.3M35.4 30.3Q38 26.4 40.6 30.3"/><path class="tut-love-eyes tut-heart tut-kt" d="M26 31.42C22.73 29.48 23.94 27.06 26 28.63C28.06 27.06 29.27 29.48 26 31.42ZM38 31.42C34.73 29.48 35.94 27.06 38 28.63C40.06 27.06 41.27 29.48 38 31.42Z"/><g class="tut-float-heart" style="transform-origin:43.3px 23.3px"><path class="tut-heart tut-kt" d="M43.3 24.5C41.14 23.22 41.94 21.62 43.3 22.66C44.66 21.62 45.46 23.22 43.3 24.5ZM21.7 27.2C20.08 26.24 20.68 25.04 21.7 25.82C22.72 25.04 23.32 26.24 21.7 27.2Z"/></g><g class="tut-wink"><ellipse class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="26" cy="29.6" rx="2.3" ry="2.64"/><path class="tut-kt tut-nf" d="M35.4 30.3Q38 26.4 40.6 30.3"/></g><g class="tut-wow"><circle class="tut-fp tut-kt" fill="url(#tut3f84eeR1-fp) #fdf8ec" stroke="#7a859e" cx="26" cy="29.6" r="2.99"/><circle class="tut-fp tut-kt" fill="url(#tut3f84eeR1-fp) #fdf8ec" stroke="#7a859e" cx="38" cy="29.6" r="2.99"/><circle class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="26" cy="29.6" r="1.26"/><circle class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="38" cy="29.6" r="1.26"/></g><path class="tut-brow-up tut-kt tut-nf" d="M35.5 24.5Q38 22.5 40.7 24.7"/><g class="tut-ask" style="transform-origin:45.5px 19.9px"><path class="tut-ask-edge" d="M43.9 19.3Q44.1 16.9 45.9 16.9Q47.9 17.1 47.5 18.9Q47.1 20.1 45.8 20.7L45.8 21.9"/><circle class="tut-ask-dot" cx="45.8" cy="23.9" r="2"/><path class="tut-k tut-nf" d="M43.9 19.3Q44.1 16.9 45.9 16.9Q47.9 17.1 47.5 18.9Q47.1 20.1 45.8 20.7L45.8 21.9"/><circle class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="45.8" cy="23.9" r="0.9"/></g><path class="tut-smug tut-kt tut-nf" d="M23.5 29.6Q26 31.21 28.5 29.6M35.5 29.6Q38 31.21 40.5 29.6"/><g class="tut-sparkle" style="transform-origin:45.5px 19.9px"><path class="tut-star tut-kt" d="M45.5 17.3L46.23 19.17L48.1 19.9L46.23 20.63L45.5 22.5L44.77 20.63L42.9 19.9L44.77 19.17Z"/></g><g class="tut-blush"><ellipse cx="25.2" cy="34.3" rx="2.76" ry="1.43"/><ellipse cx="38.8" cy="34.3" rx="2.76" ry="1.43"/></g><g class="tut-shades"><path class="tut-fi tut-kt" fill="url(#tut3f84eeR1-fi) #1c141e" stroke="#050306" d="M22.9 27.65L29.11 27.65Q29.11 32.36 26 32.25Q22.9 32.36 22.9 27.65ZM34.9 27.65L41.11 27.65Q41.11 32.36 38 32.25Q34.9 32.36 34.9 27.65Z"/><path class="tut-kt tut-nf" d="M28.99 28.45L35.01 28.45"/><path class="tut-shine" d="M24.39 28.91l1.38 -1.15M36.39 28.91l1.38 -1.15"/></g><path class="tut-squeeze tut-kt tut-nf" d="M23.7 27.76L27.61 29.6L23.7 31.44M40.3 27.76L36.39 29.6L40.3 31.44"/><g class="tut-joy-tear" style="transform-origin:26px 29.6px"><path class="tut-drop tut-kt" d="M22.3 30.2Q23.42 31.96 22.3 32.44Q21.18 31.96 22.3 30.2ZM41.7 30.2Q42.82 31.96 41.7 32.44Q40.58 31.96 41.7 30.2Z"/></g><path class="tut-brows-down tut-kt tut-nf" d="M23.3 24.3L27.84 26.1M40.7 24.3L36.16 26.1"/><g class="tut-steam" style="transform-origin:45.5px 19.9px"><path class="tut-puff tut-kt" d="M42.9 20.9a1.6 1.6 0 0 1 1 -2.8a2 2 0 0 1 3.4 0a1.6 1.6 0 0 1 1 2.8Z"/></g><g class="tut-fright"><circle class="tut-fp tut-kt" fill="url(#tut3f84eeR1-fp) #fdf8ec" stroke="#7a859e" cx="26" cy="29.6" r="3.11"/><circle class="tut-fp tut-kt" fill="url(#tut3f84eeR1-fp) #fdf8ec" stroke="#7a859e" cx="38" cy="29.6" r="3.11"/><circle class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="26" cy="29.9" r="0.74"/><circle class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" cx="38" cy="29.9" r="0.74"/></g><g class="tut-half"><path class="tut-fi" fill="url(#tut3f84eeR1-fi) #1c141e" d="M23.7 29.6A2.3 2.53 0 0 0 28.3 29.6ZM35.7 29.6A2.3 2.53 0 0 0 40.3 29.6Z"/><path class="tut-kt tut-nf" d="M23.2 29.6L28.8 29.6M35.2 29.6L40.8 29.6"/></g><path class="tut-star-eyes tut-star tut-kt" d="M26 26.04L26.94 28.3L29.39 28.5L27.53 30.1L28.1 32.48L26 31.2L23.9 32.48L24.47 30.1L22.61 28.5L25.06 28.3ZM38 26.04L38.94 28.3L41.39 28.5L39.53 30.1L40.1 32.48L38 31.2L35.9 32.48L36.47 30.1L34.61 28.5L37.06 28.3Z"/><g class="tut-notes" style="transform-origin:45.5px 19.9px"><path class="tut-fi tut-kt" fill="url(#tut3f84eeR1-fi) #1c141e" stroke="#050306" d="M44.5 21.4a1.2 0.95 -20 1 0 2.3 -0.1L46.8 16.8L48.7 17.8L48.7 18.8L47.4 18.2L47.4 21.3ZM19.2 24.3a0.9 0.71 -20 1 0 1.73 -0.08L20.93 20.85L22.35 21.6L22.35 22.35L21.38 21.9L21.38 24.23Z"/></g><g class="tut-spiral"><path class="tut-kt tut-nf" style="transform-origin:26px 29.6px" d="M27.15 29.6A1.15 1.15 0 1 0 26 28.45A2.3 2.3 0 1 1 23.7 30.29"/><path class="tut-kt tut-nf" style="transform-origin:38px 29.6px" d="M39.15 29.6A1.15 1.15 0 1 0 38 28.45A2.3 2.3 0 1 1 35.7 30.29"/></g><path class="tut-brows tut-kt tut-nf" d="M23.3 26L27.61 24.3M40.7 26L36.39 24.3"/><g class="tut-tear" style="transform-origin:26.6px 32.7px"><path class="tut-drop tut-kt" d="M26.6 32.7Q28.1 35 26.6 35.7Q25.1 35 26.6 32.7Z"/></g><g class="tut-sweat" style="transform-origin:44.7px 24.1px"><path class="tut-drop tut-kt" d="M44.7 24.1Q46.4 26.7 44.7 27.5Q43 26.7 44.7 24.1Z"/></g></g></svg></span></span></span></span></span></span></span></span></span></span></span>
           <script>
 (function () {
   var swing = document.querySelector(".logo-hang-swing");

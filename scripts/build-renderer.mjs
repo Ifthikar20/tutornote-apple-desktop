@@ -17,8 +17,10 @@
   working tree, its dist/ and its node_modules are never touched, and nobody's unfinished changes
   end up in the app. The checkout's .env.off (the build profile's settings: API at the relative
   /api, Turnstile off; VITE_* values, which end up in the public bundle anyway) is copied in, as
-  `npm run build:off` needs it. renderer/BUILD records the commit and the time. Then the sign-in
-  screen's hanging tutor is drawn from the same export (scripts/sign-in-tutor.mjs).
+  `npm run build:off` needs it. Before renderer/ is replaced, the tutors on the app's own screens
+  are drawn from the same export (scripts/static-tutors.mjs): every tutor the floating blob can rest
+  as (static/blob.html), and the sign-in screen's hanging one. renderer/BUILD records the commit and
+  the time.
 */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -122,10 +124,13 @@ if (!fs.existsSync(stamp) || fs.readFileSync(stamp, "utf8") !== lockHash) {
 say("building the web app (build:off)");
 run("npm", ["run", "build:off"], { cwd: buildDir });
 
+// The tutors on the app's own screens, drawn from the same export (scripts/static-tutors.mjs): every
+// tutor the floating blob can rest as (static/blob.html), and the sign-in screen's hanging one.
+// Before renderer/ is replaced, so a failure leaves the bundle and the pages as they were.
+run(process.execPath, [path.join(root, "scripts", "static-tutors.mjs"), buildDir]);
+
 say("copying the bundle into renderer/");
 fs.rmSync(out, { recursive: true, force: true });
 fs.cpSync(path.join(buildDir, "dist"), out, { recursive: true });
 fs.writeFileSync(path.join(out, "BUILD"), `${sha} ${new Date().toISOString().slice(0, 16)}Z\n`);
-// The sign-in screen's hanging tutor, drawn from the same commit's LogoHang (static/signin.html).
-run(process.execPath, [path.join(root, "scripts", "sign-in-tutor.mjs"), buildDir]);
 say(`renderer/ is ${fs.readFileSync(path.join(out, "BUILD"), "utf8").trim()}`);
